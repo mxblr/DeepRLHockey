@@ -1,3 +1,5 @@
+__author__  = "Maximilian Beller"
+
 import gym
 import numpy as np
 
@@ -11,19 +13,29 @@ import progressbar
 from IPython.display import clear_output
 import matplotlib.pyplot as plt
 
-def plot(total_rewards_per_episode,total_loss_V,total_loss_Q1, total_loss_Q2, total_loss_PI):
+def plot(total_rewards_per_episode,total_loss_V= [],total_loss_Q1= [], total_loss_Q2= [], total_loss_PI= [], winning = [], plot_type = 0):
     clear_output(True)
-    fig, axes = plt.subplots(2, 2)
-    axes[0, 0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
-    axes[0, 0].set_title("Reward")
-    axes[0, 1].plot(range(len(total_loss_V)), total_loss_V)
-    axes[0, 1].set_title("V loss")
-  
-    axes[1, 0].plot(range(len(total_loss_Q1)), total_loss_Q1, c="r")
-    axes[1, 0].plot(range(len(total_loss_Q2)), total_loss_Q2, c="b")
-    axes[1, 0].set_title("Q losses")
-    axes[1, 1].plot(range(len(total_loss_PI)), total_loss_PI)
-    axes[1, 1].set_title("PI Loss") 
+    if plot_type== 0:
+        plt.plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
+    if plot_type ==1:
+        fig, axes = plt.subplots(2, 2)
+        axes[0, 0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
+        axes[0, 0].set_title("Reward")
+        axes[0, 1].plot(range(len(total_loss_V)), total_loss_V)
+        axes[0, 1].set_title("V loss")
+      
+        axes[1, 0].plot(range(len(total_loss_Q1)), total_loss_Q1, c="r")
+        axes[1, 0].plot(range(len(total_loss_Q2)), total_loss_Q2, c="b")
+        axes[1, 0].set_title("Q losses")
+        axes[1, 1].plot(range(len(total_loss_PI)), total_loss_PI)
+        axes[1, 1].set_title("PI Loss") 
+    if plot_type ==2:
+        fig, axes = plt.subplots(1, 2)
+        axes[0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
+        axes[0].set_title("Reward")
+        axes[1].plot(range(len(winning)), winning)
+        axes[1].set_title("Win fraction")
+      
     plt.show()
 
 
@@ -43,7 +55,8 @@ class SoftActorCritic:
             "buffer_size": int(1e6),
             "batch_size": 256,
             "alpha":1.0,
-            "dim":3}
+            "dim_act":3,
+            "dim_obs":16}
         self._config.update(userconfig)
         self._scope = scope
         self._sess = tf.get_default_session() or tf.InteractiveSession()
@@ -106,10 +119,10 @@ class SoftActorCritic:
     #################################################################################################
     def _prep_train(self):
         
-        self.obs = tf.placeholder(dtype=tf.float32, shape=(None, self._o_space.shape[0]), name="obs")        
-        self.act = tf.placeholder(dtype=tf.float32, shape=(None,self._config["dim"]), name="act")  
+        self.obs = tf.placeholder(dtype=tf.float32, shape=(None, self._config["dim_obs"]), name="obs")        
+        self.act = tf.placeholder(dtype=tf.float32, shape=(None,self._config["dim_act"]), name="act")  
         self.rew = tf.placeholder(dtype=tf.float32, shape=(None,1), name="rew") 
-        self.obs_new = tf.placeholder(dtype=tf.float32, shape=(None, self._o_space.shape[0]), name="obs_new") 
+        self.obs_new = tf.placeholder(dtype=tf.float32, shape=(None, self._config["dim_obs"]), name="obs_new") 
         self.done = tf.placeholder(dtype=tf.float32, shape=(None,1), name="done") 
               
 
@@ -165,10 +178,10 @@ class SoftActorCritic:
         # Sample from replay buffer
         X_batch_full = self.buffer.sample(batch = self._config["batch_size"])
         # Extract states, actions, ...
-        X_batch_obs = np.asarray(np.vstack(X_batch_full[:,0])).reshape(-1, self._o_space.shape[0])
-        X_batch_act = np.asarray(np.vstack(X_batch_full[:,1])).reshape(-1, self._config["dim"])
+        X_batch_obs = np.asarray(np.vstack(X_batch_full[:,0])).reshape(-1, self._config["dim_obs"])
+        X_batch_act = np.asarray(np.vstack(X_batch_full[:,1])).reshape(-1, self._config["dim_act"])
         X_batch_rew = np.asarray(X_batch_full[:,2]).reshape(-1, 1)
-        X_batch_obs_new = np.asarray(np.vstack(X_batch_full[:,3])).reshape(-1, self._o_space.shape[0])
+        X_batch_obs_new = np.asarray(np.vstack(X_batch_full[:,3])).reshape(-1,self._config["dim_obs"])
         X_batch_done = np.asarray(X_batch_full[:,4]).reshape(-1, 1)
         
         fddct =    {self.obs : X_batch_obs,   

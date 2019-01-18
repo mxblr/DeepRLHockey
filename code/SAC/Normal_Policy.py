@@ -1,8 +1,8 @@
+__author__  = "Maximilian Beller"
 import numpy as np
 
 import tensorflow_probability as tfp
 import tensorflow as tf
-from tensorflow.python.training import training_util
 
 
 class Normal_Policy:
