@@ -26,6 +26,6 @@ class Value_function:
             
     def _build_graph(self):  
         x = self._input
-        for l in self._config["hidden_layers"]:
-            x = tf.layers.dense(x, l, activation=self._config["hidden_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"])
-        self.output = tf.layers.dense(x,1,activation=self._config["output_act_fct"],kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"])
+        for i,l in enumerate(self._config["hidden_layers"]):
+            x = tf.layers.dense(x, l, activation=self._config["hidden_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"],  name="hidden_%s" % (i))
+        self.output = tf.layers.dense(x,1,activation=self._config["output_act_fct"],kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"], name ="output")

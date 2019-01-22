@@ -13,11 +13,13 @@ import progressbar
 from IPython.display import clear_output
 import matplotlib.pyplot as plt
 
-def plot(total_rewards_per_episode,total_loss_V= [],total_loss_Q1= [], total_loss_Q2= [], total_loss_PI= [], winning = [], plot_type = 0):
+import os 
+
+def plot(total_rewards_per_episode=[],total_loss_V= [],total_loss_Q1= [], total_loss_Q2= [], total_loss_PI= [], winning = [], plot_type = 0):
     clear_output(True)
     if plot_type== 0:
         plt.plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
-    if plot_type ==1:
+    elif plot_type ==1:
         fig, axes = plt.subplots(2, 2)
         axes[0, 0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
         axes[0, 0].set_title("Reward")
@@ -29,20 +31,22 @@ def plot(total_rewards_per_episode,total_loss_V= [],total_loss_Q1= [], total_los
         axes[1, 0].set_title("Q losses")
         axes[1, 1].plot(range(len(total_loss_PI)), total_loss_PI)
         axes[1, 1].set_title("PI Loss") 
-    if plot_type ==2:
+    elif plot_type ==2:
         fig, axes = plt.subplots(1, 2)
         axes[0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
         axes[0].set_title("Reward")
         axes[1].plot(range(len(winning)), winning)
         axes[1].set_title("Win fraction")
-      
+    elif plot_type ==3:
+        plt.plot(range(len(winning)), winning)
+        
     plt.show()
 
 
 
 
 class SoftActorCritic:
-    def __init__(self, o_space, a_space, value_fct, policy_fct, env, q_fct_config = {}, v_fct_config = {}, pi_fct_config = {}, scope='SACAgent', **userconfig):
+    def __init__(self, o_space, a_space, value_fct, policy_fct, env, q_fct_config = {}, v_fct_config = {}, pi_fct_config = {}, scope='SACAgent', save_path ="/weights/model.ckpt" , **userconfig):
         self._o_space = o_space
         self._a_space = a_space
         self._config = {
@@ -67,16 +71,40 @@ class SoftActorCritic:
         self._q_fct_config = q_fct_config
         self._v_fct_config =v_fct_config 
         self._pi_fct_config = pi_fct_config
+        self._save_path = save_path
 
         self.env = env
 
-        self._prep_train()    
-        self._sess.run(tf.global_variables_initializer())
-        self._init_update_target_V()
+        
+        self._prep_train()   
+        
+        #tf.reset_default_graph()
+       
+        
+        if os.path.isfile(self._save_path+".meta") :
+           
 
+            #self._saver = tf.train.import_meta_graph(self._save_path+".meta")
+            #self._saver.restore(self._sess, self._save_path)
+
+            self._saver = tf.train.Saver()
+            self._saver.restore(self._sess, self._save_path)
+            print("restored")
+        
+            #self._prep_train()    
+            #self._sess.run(tf.global_variables_initializer())
+           
+        else: 
+            
+            
+            self._sess.run(tf.global_variables_initializer())
+            self._saver = tf.train.Saver()
+            
+        self._init_update_target_V()
+        
     def _init_update_target_V(self):
-        source_params = self._global_vars("V_func")
-        target_params = self._global_vars("V_target")    
+        source_params = self._vars("V_func")
+        target_params = self._vars("V_target")    
         self._update_target_V_ops = [
             tf.assign(target, (1 - self._config["tau"]) * target + self._config["tau"] * source)
             for target, source in zip(target_params, source_params)
@@ -99,7 +127,7 @@ class SoftActorCritic:
     def act_greedy(self, observation):
         fddct = {self.obs : observation}
         
-        actions = self._sess.run([tf.tanh(self._Policy.mu)], feed_dict=fddct)
+        actions = self._sess.run([tf.tanh(self._Policy.mu, name = "tanh")], feed_dict=fddct)
         return actions[0]
     
     
@@ -156,15 +184,15 @@ class SoftActorCritic:
         self.Q2_loss = 0.5 *  tf.reduce_mean((tf.stop_gradient(self.rew + self._config["discount"] * (1 - self.done) * self._V_target.output)-self._Q2.output )**2)
         
         self.Q1optim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Q"],name='AdamQ1')
-        self._train_opQ1 = self.Q1optim.minimize(loss= self.Q1_loss, var_list= self._vars(self._Q1._scope))
+        self._train_opQ1 = self.Q1optim.minimize(loss= self.Q1_loss, var_list= self._vars(self._Q1._scope), name='AdamQ1_min')
         
         self.Q2optim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Q"],name='AdamQ2')
-        self._train_opQ2 = self.Q2optim.minimize(loss=self.Q2_loss, var_list= self._vars(self._Q2._scope))
+        self._train_opQ2 = self.Q2optim.minimize(loss=self.Q2_loss, var_list= self._vars(self._Q2._scope), name='AdamQ2_min')
         
         # V update 
         self.V_loss = 0.5 * tf.reduce_mean((self._V.output - self.y_v)**2)
         self.Voptim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_V"],name='AdamV')
-        self._train_opV = self.Voptim.minimize(loss= self.V_loss, var_list= self._vars(self._V._scope))
+        self._train_opV = self.Voptim.minimize(loss= self.V_loss, var_list= self._vars(self._V._scope),name='AdamV_min')
 
         # PI update
         self.PI_loss_KL = tf.reduce_mean(self._config["alpha"]* self.log_prob_new_act - self._Q1_pi.output)
@@ -172,7 +200,7 @@ class SoftActorCritic:
         self.PI_loss =   self.PI_loss_KL + self.policy_regularization_loss
         
         self.PIoptim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Pi"],name='AdamPi')
-        self._train_opPI = self.PIoptim.minimize(loss= self.PI_loss, var_list=self._vars(self._Policy._scope))  
+        self._train_opPI = self.PIoptim.minimize(loss= self.PI_loss, var_list=self._vars(self._Policy._scope),name='AdamPi_min')  
     
     def _train(self,  update_value_target):
         # Sample from replay buffer
@@ -251,4 +279,7 @@ class SoftActorCritic:
             if i % 1 == 0:
                 plot(total_rewards_per_episode,total_loss_V,total_loss_Q1, total_loss_Q2, total_loss_PI) 
             bar.update(i)   
+        self._saver.save(self._sess, self._save_path)
+
         return total_rewards_per_episode
+

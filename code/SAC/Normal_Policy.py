@@ -27,20 +27,20 @@ class Normal_Policy:
             
     def _build_graph(self):
         x = self._input
-        for l in self._config["hidden_layers"]:
-            x = tf.layers.dense(x, l, activation=self._config["hidden_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"])
+        for i,l in enumerate(self._config["hidden_layers"]):
+            x = tf.layers.dense(x, l, activation=self._config["hidden_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"],  name="hidden_%s" % (i))
         
-        self.mu = tf.layers.dense(x, self._config["dim"],activation=self._config["output_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"])
+        self.mu = tf.layers.dense(x, self._config["dim"],activation=self._config["output_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"], name = "mu")
  
-        self.log_std = tf.layers.dense(x,self._config["dim"],activation=self._config["output_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"])
-        self.log_std = tf.clip_by_value(self.log_std, -20, 2)
-        self.std = tf.exp(self.log_std)
+        self.log_std = tf.layers.dense(x,self._config["dim"],activation=self._config["output_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"], name = "log_std")
+        self.log_std = tf.clip_by_value(self.log_std, -20, 2, name = "log_std_clipped")
+        self.std = tf.exp(self.log_std, name ="std")
 
         self.normal_dist = tfp.distributions.MultivariateNormalDiag(loc=self.mu, scale_diag=self.std)
         
         self.sample = self.normal_dist.sample()
         
-        self.act = tf.tanh(self.sample)
+        self.act = tf.tanh(self.sample, "tanh")
         self.log_prob = self.normal_dist.log_prob(self.sample)
         
         
