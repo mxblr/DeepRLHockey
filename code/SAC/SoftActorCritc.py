@@ -8,6 +8,7 @@ import tensorflow as tf
 from tensorflow.python.training import training_util
 
 from  SAC.memory import Memory
+from  SAC.memory2 import ReplayBuffer
 import progressbar
 
 from IPython.display import clear_output
@@ -65,7 +66,8 @@ class SoftActorCritic:
         self._scope = scope
         self._sess = tf.get_default_session() or tf.InteractiveSession()
         self.global_step = training_util.get_or_create_global_step()
-        self.buffer = Memory(self._config["buffer_size"])
+        #self.buffer = Memory(self._config["buffer_size"])
+        self.buffer =  ReplayBuffer(obs_dim=self._config["dim_obs"], act_dim=self._config["dim_act"], size=self._config["buffer_size"])
         self._v_fct =  value_fct
         self._pi_fct = policy_fct
         self._q_fct_config = q_fct_config
@@ -75,6 +77,7 @@ class SoftActorCritic:
 
         self.env = env
 
+        self.global_step =  tf.train.get_or_create_global_step()
         
         self._prep_train()   
         
@@ -101,6 +104,8 @@ class SoftActorCritic:
             self._saver = tf.train.Saver()
             
         self._init_update_target_V()
+        self.increment_global_step_op = tf.assign(self.global_step, self.global_step+1)
+            
         
     def _init_update_target_V(self):
         source_params = self._vars("V_func")
@@ -143,6 +148,7 @@ class SoftActorCritic:
         
         return action
         
+
     #################################################################################################
     #################################################################################################
     def _prep_train(self):
@@ -172,9 +178,9 @@ class SoftActorCritic:
             
         self.log_prob_new_act = tf.reshape(self._Policy.log_prob - tf.reduce_sum(tf.log( 1 - self._Policy.act**2 + 1e-6), axis=1) , (-1,1))         
         
-        D_s = self._Policy.act.shape.as_list()[-1]
-        self.normal = tfp.distributions.MultivariateNormalDiag(loc=tf.zeros(D_s), scale_diag=tf.ones(D_s))
-        self.log_prob_prior = tf.reshape(self.normal.log_prob(self._Policy.act), (-1,1))
+        #D_s = self._Policy.act.shape.as_list()[-1]
+        #self.normal = tfp.distributions.MultivariateNormalDiag(loc=tf.zeros(D_s), scale_diag=tf.ones(D_s))
+        self.log_prob_prior =0.0#tf.reshape(self.normal.log_prob(self._Policy.act), (-1,1))
         
         self.min_Q1_Q2 = tf.minimum(self._Q1_pi.output,self._Q2_pi.output)                                
         self.y_v = tf.stop_gradient(self.min_Q1_Q2 - self._config["alpha"] * (self.log_prob_new_act + self.log_prob_prior))
@@ -184,15 +190,17 @@ class SoftActorCritic:
         self.Q2_loss = 0.5 *  tf.reduce_mean((tf.stop_gradient(self.rew + self._config["discount"] * (1 - self.done) * self._V_target.output)-self._Q2.output )**2)
         
         self.Q1optim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Q"],name='AdamQ1')
-        self._train_opQ1 = self.Q1optim.minimize(loss= self.Q1_loss, var_list= self._vars(self._Q1._scope), name='AdamQ1_min')
+        self._train_opQ1 = self.Q1optim.minimize(loss= self.Q1_loss, var_list= self._vars(self._Q1._scope), name='AdamQ1_min') #########################
         
         self.Q2optim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Q"],name='AdamQ2')
-        self._train_opQ2 = self.Q2optim.minimize(loss=self.Q2_loss, var_list= self._vars(self._Q2._scope), name='AdamQ2_min')
+        with tf.control_dependencies([self._train_opQ1]):       
+            self._train_opQ2 = self.Q2optim.minimize(loss=self.Q2_loss, var_list= self._vars(self._Q2._scope), name='AdamQ2_min') #########################
         
         # V update 
         self.V_loss = 0.5 * tf.reduce_mean((self._V.output - self.y_v)**2)
         self.Voptim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_V"],name='AdamV')
-        self._train_opV = self.Voptim.minimize(loss= self.V_loss, var_list= self._vars(self._V._scope),name='AdamV_min')
+        with tf.control_dependencies([self._train_opQ2 ]):      
+            self._train_opV = self.Voptim.minimize(loss= self.V_loss, var_list= self._vars(self._V._scope),name='AdamV_min') #########################
 
         # PI update
         self.PI_loss_KL = tf.reduce_mean(self._config["alpha"]* self.log_prob_new_act - self._Q1_pi.output)
@@ -200,32 +208,33 @@ class SoftActorCritic:
         self.PI_loss =   self.PI_loss_KL + self.policy_regularization_loss
         
         self.PIoptim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Pi"],name='AdamPi')
-        self._train_opPI = self.PIoptim.minimize(loss= self.PI_loss, var_list=self._vars(self._Policy._scope),name='AdamPi_min')  
+        with tf.control_dependencies([self._train_opV]):      
+            self._train_opPI = self.PIoptim.minimize(loss= self.PI_loss, var_list=self._vars(self._Policy._scope),name='AdamPi_min')  #########################
     
     def _train(self,  update_value_target):
         # Sample from replay buffer
-        X_batch_full = self.buffer.sample(batch = self._config["batch_size"])
         # Extract states, actions, ...
-        X_batch_obs = np.asarray(np.vstack(X_batch_full[:,0])).reshape(-1, self._config["dim_obs"])
-        X_batch_act = np.asarray(np.vstack(X_batch_full[:,1])).reshape(-1, self._config["dim_act"])
-        X_batch_rew = np.asarray(X_batch_full[:,2]).reshape(-1, 1)
-        X_batch_obs_new = np.asarray(np.vstack(X_batch_full[:,3])).reshape(-1,self._config["dim_obs"])
-        X_batch_done = np.asarray(X_batch_full[:,4]).reshape(-1, 1)
+
+
+        batch = self.buffer.sample_batch(self._config["batch_size"])
+        fddct = {self.obs: batch['obs1'],
+                    self.act: batch['acts'],
+                    self.rew: batch['rews'].reshape(-1, 1),
+                    self.obs_new: batch['obs2'],
+                    self.done: batch['done'].reshape(-1, 1),
+                    }
         
-        fddct =    {self.obs : X_batch_obs,   
-                    self.act : X_batch_act,
-                    self.rew : X_batch_rew,
-                    self.obs_new : X_batch_obs_new,
-                    self.done : X_batch_done}
+
          
-        train_ops = [self._train_opPI, self.PI_loss,
+        train_ops = [
+                    self._train_opPI, self.PI_loss,
                      self._train_opV, self.V_loss,
                      self._train_opQ1, self.Q1_loss,
-                     self._train_opQ2, self.Q2_loss]
-        _, loss_PI_fct,_, loss_V_fct,_, loss_Q1_fct,_, loss_Q2_fct = self._sess.run(train_ops, feed_dict=fddct)
+                     self._train_opQ2, self.Q2_loss,
+                     self._update_target_V_ops]
+        _, loss_PI_fct,_, loss_V_fct,_, loss_Q1_fct,_, loss_Q2_fct,_ = self._sess.run(train_ops, feed_dict=fddct)
         
-        if update_value_target:
-            self._sess.run(self._update_target_V_ops)
+        
         return loss_V_fct, loss_Q1_fct,loss_Q2_fct,loss_PI_fct
         
     
@@ -259,7 +268,7 @@ class SoftActorCritic:
                         
                     (ob_new, reward, done, _info) = self.env.step(a)
                     total_reward += reward
-                    self.store_transition(ob, a, reward, ob_new, done)
+                    self.buffer.store(ob, a, reward, ob_new, done)
                     ob=ob_new
   
                 if j  >= self._config["batch_size"]:
@@ -279,7 +288,7 @@ class SoftActorCritic:
             if i % 1 == 0:
                 plot(total_rewards_per_episode,total_loss_V,total_loss_Q1, total_loss_Q2, total_loss_PI) 
             bar.update(i)   
-        self._saver.save(self._sess, self._save_path)
+        self._saver.save(self._sess, self._save_path, self.global_step)
 
         return total_rewards_per_episode
 

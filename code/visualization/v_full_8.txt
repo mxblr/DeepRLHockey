@@ -1,0 +1,26 @@
+q_fct_config = {"hidden_layers": [96, 96]}
+v_fct_config = {"hidden_layers": [96, 96]}
+pi_fct_config = {"hidden_layers": [96, 96], "dim":3}
+
+SAC_agent = SoftActorCritic(o_space=o_space, 
+                            a_space=ac_space, 
+                            value_fct=Value_function, 
+                            policy_fct=Normal_Policy, 
+                            env= env,
+                            discount=  0.92, 
+                            tau = 0.01, 
+                            batch_size=64, 
+                            alpha = 1.0,
+                            lambda_V = 1e-3, 
+                            lambda_Pi = 1e-3, 
+                            lambda_Q = 1e-3,
+                            dim_act = 3,
+                            dim_obs = 16,
+                            buffer_size = int(1e5),
+                            q_fct_config=q_fct_config,
+                            v_fct_config=v_fct_config,
+                            pi_fct_config=pi_fct_config, 
+                            save_path = save_path_new) 
+
+reward = reward/2.0 - (_info['reward_puck_direction'] == 0.0) * 0.01 + _info['reward_puck_direction']
+train(10000, burn_in = 5, writer = writer) - random steps
