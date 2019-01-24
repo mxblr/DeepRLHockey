@@ -55,11 +55,12 @@ class SoftActorCritic:
             "lambda_V": 3e-4,
             "lambda_Q": 3e-4,
             "lambda_Pi": 3e-4,
+            "lambda_Alpha": 3e-4,
             "discount": 0.99,
             "target_update":1,
             "buffer_size": int(1e6),
             "batch_size": 256,
-            "alpha":1.0,
+            #"alpha":1.0,
             "dim_act":3,
             "dim_obs":16}
         self._config.update(userconfig)
@@ -74,6 +75,8 @@ class SoftActorCritic:
         self._v_fct_config =v_fct_config 
         self._pi_fct_config = pi_fct_config
         self._save_path = save_path
+        self.alpha = 'auto'
+        self.target_entropy = 'auto'
 
         self.env = env
 
@@ -158,10 +161,20 @@ class SoftActorCritic:
         self.rew = tf.placeholder(dtype=tf.float32, shape=(None,1), name="rew") 
         self.obs_new = tf.placeholder(dtype=tf.float32, shape=(None, self._config["dim_obs"]), name="obs_new") 
         self.done = tf.placeholder(dtype=tf.float32, shape=(None,1), name="done") 
-              
+
+
+        if self.target_entropy == 'auto':
+            self.target_entropy = -self._config["dim_act"]
+        if self.alpha == 'auto':
+            inital_alpha = 1.0
+            self.log_alpha = tf.get_variable(name='log_alpha', dtype=tf.float32, initializer=np.log(inital_alpha).astype(np.float32))
+            self.alpha = tf.exp(self.log_alpha)
+
 
         
         with tf.variable_scope(self._scope, reuse=tf.AUTO_REUSE):
+            
+
             # Q-function network
             self._Q1 = self._v_fct(inp = tf.concat([self.obs,self.act], axis=-1), scope = "Q_func1", **self._q_fct_config)
             self._Q2 = self._v_fct(inp = tf.concat([self.obs,self.act], axis=-1), scope = "Q_func2", **self._q_fct_config) 
@@ -176,14 +189,16 @@ class SoftActorCritic:
             self._Q1_pi = self._v_fct( inp = tf.concat([self.obs,self._Policy.act], axis=-1), scope = "Q_func1", **self._q_fct_config)
             self._Q2_pi = self._v_fct( inp = tf.concat([self.obs,self._Policy.act], axis=-1), scope = "Q_func2", **self._q_fct_config) 
             
-        self.log_prob_new_act = tf.reshape(self._Policy.log_prob - tf.reduce_sum(tf.log( 1 - self._Policy.act**2 + 1e-6), axis=1) , (-1,1))         
+        self.log_prob_new_act = tf.reshape(self._Policy.log_prob - tf.reduce_sum(tf.log( 1 - self._Policy.act**2 + 1e-6), axis=1) , (-1,1))  
+
+        
         
         #D_s = self._Policy.act.shape.as_list()[-1]
         #self.normal = tfp.distributions.MultivariateNormalDiag(loc=tf.zeros(D_s), scale_diag=tf.ones(D_s))
         self.log_prob_prior =0.0#tf.reshape(self.normal.log_prob(self._Policy.act), (-1,1))
         
         self.min_Q1_Q2 = tf.minimum(self._Q1_pi.output,self._Q2_pi.output)                                
-        self.y_v = tf.stop_gradient(self.min_Q1_Q2 - self._config["alpha"] * (self.log_prob_new_act + self.log_prob_prior))
+        self.y_v = tf.stop_gradient(self.min_Q1_Q2 - self.alpha* (self.log_prob_new_act + self.log_prob_prior))
         
         # Q update
         self.Q1_loss = 0.5 *  tf.reduce_mean((tf.stop_gradient(self.rew + self._config["discount"] * (1 - self.done) * self._V_target.output)-self._Q1.output )**2)
@@ -203,13 +218,18 @@ class SoftActorCritic:
             self._train_opV = self.Voptim.minimize(loss= self.V_loss, var_list= self._vars(self._V._scope),name='AdamV_min') #########################
 
         # PI update
-        self.PI_loss_KL = tf.reduce_mean(self._config["alpha"]* self.log_prob_new_act - self._Q1_pi.output)
+        self.PI_loss_KL = tf.reduce_mean(self.alpha* self.log_prob_new_act - self._Q1_pi.output)
         self.policy_regularization_loss = 0.001 * 0.5 * (tf.reduce_mean(self._Policy.log_std**2)+tf.reduce_mean(self._Policy.mu ** 2))
         self.PI_loss =   self.PI_loss_KL + self.policy_regularization_loss
         
         self.PIoptim = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Pi"],name='AdamPi')
         with tf.control_dependencies([self._train_opV]):      
             self._train_opPI = self.PIoptim.minimize(loss= self.PI_loss, var_list=self._vars(self._Policy._scope),name='AdamPi_min')  #########################
+
+        with tf.control_dependencies([self._train_opPI]):
+            self.alpha_loss = -tf.reduce_mean(self.log_alpha * tf.stop_gradient(self.log_prob_new_act + self.target_entropy))
+            self.alpha_optimizer = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Alpha"], name='AdamAlpha')       
+            self._train_opAlpha = self.alpha_optimizer.minimize(self.alpha_loss, var_list=tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="log_alpha"),name='AdamAlpha_min')
     
     def _train(self,  update_value_target):
         # Sample from replay buffer
@@ -226,13 +246,13 @@ class SoftActorCritic:
         
 
          
-        train_ops = [
-                    self._train_opPI, self.PI_loss,
+        train_ops = [self._train_opPI, self.PI_loss,
                      self._train_opV, self.V_loss,
                      self._train_opQ1, self.Q1_loss,
                      self._train_opQ2, self.Q2_loss,
-                     self._update_target_V_ops]
-        _, loss_PI_fct,_, loss_V_fct,_, loss_Q1_fct,_, loss_Q2_fct,_ = self._sess.run(train_ops, feed_dict=fddct)
+                     self._update_target_V_ops,
+                     self.alpha_loss, self._train_opAlpha]
+        _, loss_PI_fct,_, loss_V_fct,_, loss_Q1_fct,_, loss_Q2_fct,_ ,_,_= self._sess.run(train_ops, feed_dict=fddct)
         
         
         return loss_V_fct, loss_Q1_fct,loss_Q2_fct,loss_PI_fct
