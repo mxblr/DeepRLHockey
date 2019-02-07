@@ -60,7 +60,7 @@ class SoftActorCritic:
             "target_update":1,
             "buffer_size": int(1e6),
             "batch_size": 256,
-            #"alpha":1.0,
+            "initial_alpha":1.0,
             "dim_act":3,
             "dim_obs":16}
         self._config.update(userconfig)
@@ -84,22 +84,13 @@ class SoftActorCritic:
         
         self._prep_train()   
         
-        #tf.reset_default_graph()
-       
         
         if os.path.isfile(self._save_path+".meta") :
            
 
-            #self._saver = tf.train.import_meta_graph(self._save_path+".meta")
-            #self._saver.restore(self._sess, self._save_path)
-
             self._saver = tf.train.Saver()
             self._saver.restore(self._sess, self._save_path)
-            print("restored")
-        
-            #self._prep_train()    
-            #self._sess.run(tf.global_variables_initializer())
-           
+            print("restored")           
         else: 
             
             
@@ -108,6 +99,7 @@ class SoftActorCritic:
             
         self._init_update_target_V()
         self.increment_global_step_op = tf.assign(self.global_step, self.global_step+1)
+        self._sess.run(self._update_target_V_ops_hard)
             
         
     def _init_update_target_V(self):
@@ -134,8 +126,9 @@ class SoftActorCritic:
         return actions[0]
     def act_greedy(self, observation):
         fddct = {self.obs : observation}
+        actions = self._sess.run([self._Policy.mu_tanh], feed_dict=fddct)
+        #actions = self._sess.run([self._Policy.mu], feed_dict=fddct)
         
-        actions = self._sess.run([tf.tanh(self._Policy.mu, name = "tanh")], feed_dict=fddct)
         return actions[0]
     
     
@@ -163,16 +156,40 @@ class SoftActorCritic:
         self.done = tf.placeholder(dtype=tf.float32, shape=(None,1), name="done") 
 
 
+        
+        # if version is 12 or 11: uncomment
+        """
         if self.target_entropy == 'auto':
             self.target_entropy = -self._config["dim_act"]
+        else:
+            self.target_entropy = self.target_entropy.astype(np.float32)
+
         if self.alpha == 'auto':
-            inital_alpha = 1.0
+            inital_alpha = self._config["initial_alpha"]
+            self.train_alpha = True
             self.log_alpha = tf.get_variable(name='log_alpha', dtype=tf.float32, initializer=np.log(inital_alpha).astype(np.float32))
             self.alpha = tf.exp(self.log_alpha)
+        else:
+            self.alpha = self.alpha.astype(np.float32)
+        """
+        
 
 
         
         with tf.variable_scope(self._scope, reuse=tf.AUTO_REUSE):
+            
+            if self.target_entropy == 'auto':
+                self.target_entropy = -self._config["dim_act"]
+            else:
+                self.target_entropy = self.target_entropy.astype(np.float32)
+
+            if self.alpha == 'auto':
+                inital_alpha = self._config["initial_alpha"]
+                self.train_alpha = True
+                self.log_alpha = tf.get_variable(name='log_alpha', dtype=tf.float32, initializer=np.log(inital_alpha).astype(np.float32))
+                self.alpha = tf.exp(self.log_alpha)
+            else:
+                self.alpha = self.alpha.astype(np.float32)
             
 
             # Q-function network
@@ -183,19 +200,13 @@ class SoftActorCritic:
             # Value-function network
             self._V        = self._v_fct(inp = self.obs, scope = "V_func", **self._v_fct_config)
             self._V_target = self._v_fct(inp = self.obs_new,  scope = "V_target", **self._v_fct_config)
-      
         
         with tf.variable_scope(self._scope, reuse=True):     
             self._Q1_pi = self._v_fct( inp = tf.concat([self.obs,self._Policy.act], axis=-1), scope = "Q_func1", **self._q_fct_config)
             self._Q2_pi = self._v_fct( inp = tf.concat([self.obs,self._Policy.act], axis=-1), scope = "Q_func2", **self._q_fct_config) 
             
-        self.log_prob_new_act = tf.reshape(self._Policy.log_prob - tf.reduce_sum(tf.log( 1 - self._Policy.act**2 + 1e-6), axis=1) , (-1,1))  
-
-        
-        
-        #D_s = self._Policy.act.shape.as_list()[-1]
-        #self.normal = tfp.distributions.MultivariateNormalDiag(loc=tf.zeros(D_s), scale_diag=tf.ones(D_s))
-        self.log_prob_prior =0.0#tf.reshape(self.normal.log_prob(self._Policy.act), (-1,1))
+        self.log_prob_new_act = self._Policy.log_prob        
+        self.log_prob_prior =0.0
         
         self.min_Q1_Q2 = tf.minimum(self._Q1_pi.output,self._Q2_pi.output)                                
         self.y_v = tf.stop_gradient(self.min_Q1_Q2 - self.alpha* (self.log_prob_new_act + self.log_prob_prior))
@@ -226,10 +237,12 @@ class SoftActorCritic:
         with tf.control_dependencies([self._train_opV]):      
             self._train_opPI = self.PIoptim.minimize(loss= self.PI_loss, var_list=self._vars(self._Policy._scope),name='AdamPi_min')  #########################
 
-        with tf.control_dependencies([self._train_opPI]):
-            self.alpha_loss = -tf.reduce_mean(self.log_alpha * tf.stop_gradient(self.log_prob_new_act + self.target_entropy))
-            self.alpha_optimizer = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Alpha"], name='AdamAlpha')       
-            self._train_opAlpha = self.alpha_optimizer.minimize(self.alpha_loss, var_list=tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="log_alpha"),name='AdamAlpha_min')
+        if self.train_alpha:
+            with tf.control_dependencies([self._train_opPI]):
+                self.alpha_loss = -tf.reduce_mean(self.log_alpha * tf.stop_gradient(self.log_prob_new_act + self.target_entropy))
+                self.alpha_optimizer = tf.train.AdamOptimizer(learning_rate=self._config["lambda_Alpha"], name='AdamAlpha')       
+                self._train_opAlpha = self.alpha_optimizer.minimize(self.alpha_loss, var_list=tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=self._scope+"/log_alpha"),name='AdamAlpha_min')
+                #self._train_opAlpha = self.alpha_optimizer.minimize(self.alpha_loss, var_list=tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="log_alpha"),name='AdamAlpha_min')
     
     def _train(self,  update_value_target):
         # Sample from replay buffer
