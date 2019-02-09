@@ -1,3 +1,4 @@
+# Copied from OpenAI's Spinning-Up
 import numpy as np
 
 class ReplayBuffer:

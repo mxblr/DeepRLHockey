@@ -7,6 +7,9 @@ import tensorflow as tf
 
 class Value_function:
     def __init__(self, inp, scope='Q_fct', **userconfig):
+        """
+        Class defining the value functions of the SAC-agent (Q_functions, Value function, target Value function)
+        """
         self._scope = scope
         self._sess = tf.get_default_session() or tf.InteractiveSession()
         self._input = inp
@@ -17,7 +20,7 @@ class Value_function:
             "output_act_fct": None,
             "weights_init" : tf.contrib.layers.xavier_initializer(),
             "bias_init": tf.constant_initializer(0.)
-          	}
+            }
         self._config.update(userconfig)
 
 
@@ -25,6 +28,9 @@ class Value_function:
             self._build_graph()
             
     def _build_graph(self):  
+        """
+        simple neural network 
+        """
         x = self._input
         for i,l in enumerate(self._config["hidden_layers"]):
             x = tf.layers.dense(x, l, activation=self._config["hidden_act_fct"], kernel_initializer=self._config["weights_init"], bias_initializer= self._config["bias_init"],  name="hidden_%s" % (i))

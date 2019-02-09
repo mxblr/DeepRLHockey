@@ -1,3 +1,4 @@
+# Memory class provided 
 import numpy as np
 
 class Memory():
