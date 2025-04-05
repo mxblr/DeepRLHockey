@@ -1,54 +1,69 @@
+import matplotlib.pyplot as plt
 from IPython.core.display import clear_output
-from matplotlib import pyplot as plt
 
 
-def plot(
-    total_rewards_per_episode,
-    total_loss_V,
-    total_loss_Q1,
-    total_loss_Q2,
-    total_loss_PI,
-    winning=None,
-    plot_type=0,
-):
-    """
-    Can be used to live-plot the rewards, losses, winning rate during training instead of e.g. Tensorboard.
-    total_rewards_per_episode:  array containing the rewards per episode
-    total_loss_V:               array containing the losses of the Value function
-    total_loss_Q1:              array containing the losses of the Q1 function
-    total_loss_Q2:              array containing the losses of the Q2 function
-    total_loss_PI:              array containing the losses of the policy network
-    winning:                    array containing the percentage of wins so far
-    plot_type:      = 0:        only plot total rewards
-                    = 1:        plot total_rewards and losses
-                    = 2:        plot total rewards and winning fraction
-                    = 3:        only plot winning fraction
+class TrainingHistory:
+    def __init__(self):
+        self.episode_rewards = []
+        self.total_loss_V = []
+        self.total_loss_Q1 = []
+        self.total_loss_Q2 = []
+        self.total_loss_PI = []
+        self.winning = []
 
-    """
-    clear_output(True)
-    if plot_type == 0:
-        plt.plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
-    elif plot_type == 1:
-        fig, axes = plt.subplots(2, 2)
-        axes[0, 0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
-        axes[0, 0].set_title("Reward")
-        axes[0, 1].plot(range(len(total_loss_V)), total_loss_V)
-        axes[0, 1].set_title("V loss")
+    def update(
+        self,
+        *,
+        episode_reward: float = None,
+        loss_v: float = None,
+        loss_q1: float = None,
+        loss_q2: float = None,
+        loss_pi: float = None,
+        won_episode: int = None,
+    ):
+        if episode_reward:
+            self.episode_rewards.append(episode_reward)
+        if loss_v:
+            self.total_loss_V.append(loss_v)
+        if loss_q1:
+            self.total_loss_Q1.append(loss_q1)
+        if loss_q2:
+            self.total_loss_Q2.append(loss_q2)
+        if loss_pi:
+            self.total_loss_PI.append(loss_pi)
+        if won_episode:
+            self.winning.append(won_episode)
 
-        axes[1, 0].plot(range(len(total_loss_Q1)), total_loss_Q1, c="r")
-        axes[1, 0].plot(range(len(total_loss_Q2)), total_loss_Q2, c="b")
-        axes[1, 0].set_title("Q losses")
-        axes[1, 1].plot(range(len(total_loss_PI)), total_loss_PI)
-        axes[1, 1].set_title("PI Loss")
-    elif plot_type == 2:
-        if winning is None:
-            winning = []
-        fig, axes = plt.subplots(1, 2)
-        axes[0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
-        axes[0].set_title("Reward")
-        axes[1].plot(range(len(winning)), winning)
-        axes[1].set_title("Win fraction")
-    elif plot_type == 3:
-        plt.plot(range(len(winning)), winning)
+    def plot(self):
+        """
+        Can be used to live-plot the rewards, losses, winning rate during training instead of e.g. Tensorboard.
+        """
+        clear_output(True)
+        mosaic = """
+                AABB
+                CCDD
+                """
+        if self.winning:
+            mosaic = """
+                    AABB
+                    CCDD
+                    EEEE
+                    """
 
-    plt.show()
+        fig, axd = plt.subplot_mosaic(mosaic, figsize=(8, 4))
+
+        axd["A"].plot(range(len(self.episode_rewards)), self.episode_rewards)
+        axd["A"].set_title("Reward")
+        axd["B"].plot(range(len(self.total_loss_V)), self.total_loss_V)
+        axd["B"].set_title("V loss")
+        axd["C"].plot(range(len(self.total_loss_Q1)), self.total_loss_Q1, c="r")
+        axd["C"].plot(range(len(self.total_loss_Q2)), self.total_loss_Q2, c="b")
+        axd["C"].set_title("Q losses")
+        axd["D"].plot(range(len(self.total_loss_PI)), self.total_loss_PI)
+        axd["D"].set_title("PI Loss")
+
+        if self.winning:
+            axd["E"].plot(range(len(self.winning)), self.winning)
+            axd["E"].set_title("Win fraction")
+
+        plt.show()

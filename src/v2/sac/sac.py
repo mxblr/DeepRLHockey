@@ -5,7 +5,7 @@ import progressbar
 import torch
 import torch.nn as nn
 
-from src.v2.sac.training_utils import plot
+from src.v2.sac.training_utils import TrainingHistory
 
 
 class ReplayBuffer:
@@ -192,17 +192,16 @@ class SoftActorCritic(nn.Module):
         return action
 
     def forward(self, observation, action, reward, observation_new, env_done):
-        pass
+        loss_v_fct, loss_q1_fct, loss_q2_fct, loss_pi_fct = None, None, None, None
+        return loss_v_fct, loss_q1_fct, loss_q2_fct, loss_pi_fct
 
     def train_from_buffer(self):
         observation, action, reward, observation_new, env_done = self.buffer.sample_batch(self.config.batch_size)
-        losses = self.forward(observation, action, reward, observation_new, env_done)
-        loss_V_fct, loss_Q1_fct, loss_Q2_fct, loss_PI_fct = losses
-        return loss_V_fct, loss_Q1_fct, loss_Q2_fct, loss_PI_fct
+        return self.forward(observation, action, reward, observation_new, env_done)
 
     def train(
         self,
-        iter_fit: int = 1000,
+        epochs: int = 1000,
         max_steps: int = 500,
         env_steps: int = 1,
         grad_steps: int = 1,
@@ -212,58 +211,58 @@ class SoftActorCritic(nn.Module):
         """
         Internal training method, can be overwritten for other environments
 
-        :param iter_fit:       number of training steps
+        :param epochs:       number of training steps
         :param max_steps:       number of maximal steps per episode
         :param env_steps:      number of environment steps per iter_fit step
         :param grad_steps:     number of training steps per iter_fit step
         :param n_burn_in_steps:        number of initial steps sampled from uniform distribution over actions
         :param n_log_epochs:    Logging frequency in epochs. Defaults to 1.
         """
-        bar = progressbar.ProgressBar(max_value=iter_fit)
-        # Init Statistics
-        total_rewards_per_episode = []
-        total_loss_v, total_loss_q1, total_loss_q2, total_loss_pi = [], [], [], []
+        bar = progressbar.ProgressBar(max_value=epochs)
+        # Initialize training statistics
+        history = TrainingHistory()
 
+        # start training
         total_steps = 0
         env_done = False
-        for epoch in range(iter_fit):
+        for epoch in range(epochs):
+            # reset the environment
             ob = self.env.reset()
+
             total_reward = 0
+            # sample observations
             for _ in range(max_steps):
-                for _episode_step in range(env_steps):  #
+                for _episode_step in range(env_steps):
                     if total_steps < n_burn_in_steps:
+                        # choose random action during the burn in phase
                         a = self.env.action_space.sample()
                         a = self.reverse_action(a)
                     else:
+                        # choose an action based on our model
                         a = self.action(np.asarray(ob).reshape(1, self._o_space.shape[0]))
                         a = a[0]
 
-                    (ob_new, reward, env_done, _info) = self.env.step(a)
+                    # execute the action and receive updated observations and reward
+                    ob_new, reward, env_done, *_info = self.env.step(a)
                     total_reward += reward
+
+                    # store the action and observations
                     self.buffer.store(ob, a, reward, ob_new, env_done)
                     ob = ob_new
 
                 # update weights
                 if total_steps >= self.config.batch_size:
                     for _gradient_step in range(grad_steps):
-                        loss_V_fct, loss_Q1_fct, loss_Q2_fct, loss_PI_fct = self.train_from_buffer()
-                        total_loss_v.append(loss_V_fct)
-                        total_loss_q1.append(loss_Q1_fct)
-                        total_loss_q2.append(loss_Q2_fct)
-                        total_loss_pi.append(loss_PI_fct)
+                        # train the actor and critic models
+                        loss_v_fct, loss_q1_fct, loss_q2_fct, loss_pi_fct = self.train_from_buffer()
+                        history.update(loss_pi=loss_pi_fct, loss_q1=loss_q1_fct, loss_q2=loss_q2_fct, loss_v=loss_v_fct)
                 total_steps += 1
                 if env_done:
                     break
 
-            total_rewards_per_episode.append(total_reward)
+            history.update(episode_reward=total_reward)
             if epoch % n_log_epochs == 0:
-                plot(
-                    total_rewards_per_episode,
-                    total_loss_v,
-                    total_loss_q1,
-                    total_loss_q2,
-                    total_loss_pi,
-                )
+                history.plot()
             bar.update(epoch)
 
-        return total_rewards_per_episode
+        return history.episode_rewards
