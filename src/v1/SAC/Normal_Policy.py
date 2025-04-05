@@ -1,8 +1,7 @@
 __author__ = "Maximilian Beller"
 import numpy as np
-
-import tensorflow_probability as tfp
 import tensorflow as tf
+import tensorflow_probability as tfp
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20

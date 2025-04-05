@@ -9,7 +9,7 @@ class Memory:
         self.size = 0
 
     def add_item(self, xux_new):
-        if self.size is not 0:
+        if self.size != 0:
             self.xux = np.concatenate([self.xux, np.asarray(xux_new).reshape(1, -1)])
         else:
             self.xux = np.asarray(xux_new).reshape(1, -1)

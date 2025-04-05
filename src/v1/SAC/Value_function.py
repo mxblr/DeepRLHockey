@@ -1,6 +1,5 @@
 __author__ = "Maximilian Beller"
 
-import numpy as np
 
 import tensorflow as tf
 

@@ -1,20 +1,16 @@
 __author__ = "Maximilian Beller"
 
-import gym
-import numpy as np
+import os
 
-import tensorflow_probability as tfp
+import matplotlib.pyplot as plt
+import numpy as np
+import progressbar
 import tensorflow as tf
+from IPython.display import clear_output
+from SAC.memory2 import ReplayBuffer
 from tensorflow.python.training import training_util
 
-from SAC.memory import Memory
-from SAC.memory2 import ReplayBuffer
-import progressbar
-
-from IPython.display import clear_output
-import matplotlib.pyplot as plt
-
-import os
+import src.v2.sac.training_utils
 
 
 def plot(
@@ -45,21 +41,21 @@ def plot(
         plt.plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
     elif plot_type == 1:
         fig, axes = plt.subplots(2, 2)
-        axes[0, 0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
+        src.v2.sac.training_utils.plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
         axes[0, 0].set_title("Reward")
-        axes[0, 1].plot(range(len(total_loss_V)), total_loss_V)
+        src.v2.sac.training_utils.plot(range(len(total_loss_V)), total_loss_V)
         axes[0, 1].set_title("V loss")
 
-        axes[1, 0].plot(range(len(total_loss_Q1)), total_loss_Q1, c="r")
-        axes[1, 0].plot(range(len(total_loss_Q2)), total_loss_Q2, c="b")
+        src.v2.sac.training_utils.plot(range(len(total_loss_Q1)), total_loss_Q1, c="r")
+        src.v2.sac.training_utils.plot(range(len(total_loss_Q2)), total_loss_Q2, c="b")
         axes[1, 0].set_title("Q losses")
-        axes[1, 1].plot(range(len(total_loss_PI)), total_loss_PI)
+        src.v2.sac.training_utils.plot(range(len(total_loss_PI)), total_loss_PI)
         axes[1, 1].set_title("PI Loss")
     elif plot_type == 2:
         fig, axes = plt.subplots(1, 2)
-        axes[0].plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
+        src.v2.sac.training_utils.plot(range(len(total_rewards_per_episode)), total_rewards_per_episode)
         axes[0].set_title("Reward")
-        axes[1].plot(range(len(winning)), winning)
+        src.v2.sac.training_utils.plot(range(len(winning)), winning)
         axes[1].set_title("Win fraction")
     elif plot_type == 3:
         plt.plot(range(len(winning)), winning)
