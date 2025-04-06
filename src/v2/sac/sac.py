@@ -295,8 +295,8 @@ class SoftActorCritic(nn.Module):
         config: SoftActorCriticConfig,
         input_space,
         action_space,
-        ValueFunction: nn.Module,
-        PolicyFunction: nn.Module,
+        value_function: nn.Module,
+        policy_function: nn.Module,
         env,
     ):
         """
@@ -325,22 +325,22 @@ class SoftActorCritic(nn.Module):
         # Using OpenAIs buffer, because it lead to speed improvement
         self.buffer = ReplayBuffer(
             obs_dim=self.config.dim_obs,
-            act_dim=self.configdim_act,
+            act_dim=self.config.dim_act,
             size=self.config.buffer_size,
         )
 
         # set up the value, policy and q-function networks
-        self.Q1 = ValueFunction(self.config.v_fct_config)
-        self.Q2 = ValueFunction(self.config.v_fct_config)
-        self.Policy = PolicyFunction(self.config.pi_fct_config)
-        self.V = ValueFunction(self.config.v_fct_config)
-        self.V_target = ValueFunction(self.config.v_fct_config)
+        self.Q1 = value_function(self.config.q_fct_config)
+        self.Q2 = value_function(self.config.q_fct_config)
+        self.Policy = policy_function(self.config.pi_fct_config)
+        self.V = value_function(self.config.v_fct_config)
+        self.V_target = value_function(self.config.v_fct_config)
 
         # Alpha can also be trained
         self.target_entropy = self.config.target_entropy
         if self.target_entropy == "auto":
             self.target_entropy = -self.config.dim_act
-        self.target_entropy = self.target_entropy.astype(np.float32)
+        self.target_entropy = float(self.target_entropy)  # .cast(np.float32)
 
         # If you want to learn alpha it has to be set to 'auto'
         self.train_alpha = False
@@ -352,9 +352,9 @@ class SoftActorCritic(nn.Module):
 
         self.env = env
 
-        self._init_update_target_V()  # TODO
+        # self._init_update_target_V()  # TODO
 
-        self._sess.run(self._update_target_V_ops_hard)  # TODO
+        # self._sess.run(self._update_target_V_ops_hard)  # TODO
 
     def load_weights(self, filepath):
         # TODO
@@ -394,8 +394,8 @@ class SoftActorCritic(nn.Module):
 
     def forward(self, observation, action, reward, observation_new, env_done):
         """Calculate losses for a given set of observations, actions and rewards."""
-        q1 = self.Q1(torch.cat([observation, action], dim=-1))
-        q2 = self.Q2(torch.cat([observation, action], dim=-1))
+        q1 = self.Q1(torch.cat((observation, action), dim=-1))
+        q2 = self.Q2(torch.cat((observation, action), dim=-1))
         pi_action, pi_log_prob, _, pi_log_std, pi_mu = self.Policy(observation)
 
         # calculate value of current and new observation
@@ -403,8 +403,8 @@ class SoftActorCritic(nn.Module):
         v_target = self.V(observation_new)
 
         # Q function values for new actions
-        q1_pi = self.Q1(torch.cat([observation, pi_action], dim=-1))
-        q2_pi = self.Q2(torch.cat([observation, pi_action], dim=-1))
+        q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
+        q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
 
         # probability of actions sampled from Multivariate normal
         log_prob_new_act = pi_log_prob
@@ -417,7 +417,7 @@ class SoftActorCritic(nn.Module):
         q2_loss = 0.5 * torch.mean(torch.pow(target_q - q2, 2))
 
         # Target for value network
-        min_q1_q2 = torch.minimum((q1_pi, q2_pi))
+        min_q1_q2 = torch.minimum(q1_pi, q2_pi)
         target_v = min_q1_q2.detach() - self.alpha.detach() * (log_prob_new_act.detach() + log_prob_prior)
         v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
 
@@ -428,11 +428,11 @@ class SoftActorCritic(nn.Module):
         )
         pi_loss = pi_loss_kl + policy_regularization_loss
 
+        losses = [v_loss, q1_loss, q2_loss, pi_loss]
         if self.train_alpha:
-            _alpha_loss = -torch.mean(self.log_alpha * log_prob_new_act.detach() + self.target_entropy.detach())
-            raise NotImplementedError("Please implement the dynamic calcuation of the alpha loss.")
-
-        return v_loss, q1_loss, q2_loss, pi_loss
+            alpha_loss = -torch.mean(self.log_alpha * log_prob_new_act.detach() + self.target_entropy)
+            losses.append(alpha_loss)
+        return losses
 
     def train_from_buffer(self):
         observation, action, reward, observation_new, env_done = self.buffer.sample_batch(self.config.batch_size)
@@ -464,7 +464,7 @@ class SoftActorCritic(nn.Module):
         :param n_burn_in_steps:        number of initial steps sampled from uniform distribution over actions
         :param n_log_epochs:    Logging frequency in epochs. Defaults to 1.
         """
-        bar = progressbar.ProgressBar(max_value=epochs)
+        bar = progressbar.ProgressBar(maxval=epochs)
         # Initialize training statistics
         history = TrainingHistory()
         optimizers = {
@@ -479,7 +479,7 @@ class SoftActorCritic(nn.Module):
         env_done = False
         for epoch in range(epochs):
             # reset the environment
-            ob = self.env.reset()
+            ob, _info = self.env.reset()
 
             total_reward = 0
             # sample observations
@@ -506,17 +506,17 @@ class SoftActorCritic(nn.Module):
                 if total_steps >= self.config.batch_size:
                     for _gradient_step in range(grad_steps):
                         # train the actor and critic models
-                        loss_v, loss_q1, loss_q2, loss_pi = self.train_from_buffer()
+                        loss_v, loss_q1, loss_q2, loss_pi, *_ = self.train_from_buffer()
                         self.do_optimizer_step(optimizers["q1"], loss_q1)
                         self.do_optimizer_step(optimizers["q2"], loss_q2)
                         self.do_optimizer_step(optimizers["v"], loss_v)
                         self.do_optimizer_step(optimizers["pi"], loss_pi)
 
                         history.update(
-                            loss_pi=loss_pi.numpy(),
-                            loss_q1=loss_q1.numpy(),
-                            loss_q2=loss_q2.numpy(),
-                            loss_v=loss_v.numpy(),
+                            loss_pi=loss_pi.numpy()[0],
+                            loss_q1=loss_q1.numpy()[0],
+                            loss_q2=loss_q2.numpy()[0],
+                            loss_v=loss_v.numpy()[0],
                         )
                 total_steps += 1
                 if env_done:
