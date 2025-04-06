@@ -271,7 +271,7 @@ class SoftActorCriticConfig:
         self.learning_rate_v = learning_rate_v
         self.learning_rate_q = learning_rate_q
         self.learning_rate_pi = learning_rate_pi
-        self.lambda_Alpha = learning_rate_alpha
+        self.learning_rate_alpha = learning_rate_alpha
         self.discount = discount
         self.target_update = target_update
         self.buffer_size = buffer_size
@@ -336,9 +336,11 @@ class SoftActorCritic(nn.Module):
         self.Q1 = value_function(self.config.q_fct_config)
         self.Q2 = value_function(self.config.q_fct_config)
         self.Policy = policy_function(self.config.pi_fct_config)
+
         self.V = value_function(self.config.v_fct_config)
-        self.V_target = value_function(self.config.v_fct_config)
-        self.V_target.weights = deepcopy(self.V.weights)
+        self.V_target = deepcopy(self.V)
+        for p in self.V_target.parameters():
+            p.requires_grad = False
 
         # Alpha can also be trained
         self.target_entropy = self.config.target_entropy
@@ -373,16 +375,20 @@ class SoftActorCritic(nn.Module):
         Returns a actions sampled from the Multivariate Normal defined by the Policy network
         observation:        observation for the agent in the form [[obs1, obs2, obs3,..., obs_n]]
         """
-        sampled_action, _sampled_action_log_prob, _greedy_action, _, _ = self.Policy(observation)
-        return sampled_action[0]
+
+        with torch.no_grad():
+            sampled_action, _sampled_action_log_prob, _greedy_action, _, _ = self.Policy(observation)
+        return sampled_action.numpy()[0]
 
     def act_greedy(self, observation):
         """
         Returns the mean of the Multivariate Normal defined by the policy network - and therefore the greedy action.
         observation:        observation for the agent in the form [[obs1, obs2, obs3,..., obs_n]]
         """
-        _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(observation)
-        return greedy_action[0]
+
+        with torch.no_grad():
+            _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(observation)
+        return greedy_action.numpy()[0]
 
     def reverse_action(self, action):
         """
@@ -400,19 +406,12 @@ class SoftActorCritic(nn.Module):
         """Calculate losses for a given set of observations, actions and rewards."""
         q1 = self.Q1(torch.cat((observation, action), dim=-1))
         q2 = self.Q2(torch.cat((observation, action), dim=-1))
-        pi_action, pi_log_prob, _, pi_log_std, pi_mu = self.Policy(observation)
+        pi_action, log_prob_new_act, _, pi_log_std, pi_mu = self.Policy(observation)
 
         # calculate value of current and new observation
         v = self.V(observation)
         v_target = self.V(observation_new)
 
-        # Q function values for new actions
-        with torch.no_grad():
-            q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
-            q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
-
-        # probability of actions sampled from Multivariate normal
-        log_prob_new_act = pi_log_prob
         # Uniform normal assumed - therefore prior is 0
         log_prob_prior = 0.0
 
@@ -422,12 +421,17 @@ class SoftActorCritic(nn.Module):
         q2_loss = 0.5 * torch.mean(torch.pow(target_q - q2, 2))
 
         # Target for value network
-        min_q1_q2 = torch.minimum(q1_pi.detach(), q2_pi.detach())
+        # Q function values for new actions
+        with torch.no_grad():
+            q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
+            q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
+
+        min_q1_q2 = torch.minimum(q1_pi, q2_pi)
         target_v = min_q1_q2.detach() - self.alpha.detach() * (log_prob_new_act.detach() + log_prob_prior)
         v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
 
         # PI update
-        pi_loss_kl = torch.mean(self.alpha * log_prob_new_act - q1_pi)
+        pi_loss_kl = torch.mean(self.alpha.detach() * log_prob_new_act.detach() - q1_pi)
         policy_regularization_loss = (
             0.001 * 0.5 * (torch.mean(torch.pow(pi_log_std, 2)) + torch.mean(torch.pow(pi_mu, 2)))
         )
@@ -435,8 +439,10 @@ class SoftActorCritic(nn.Module):
 
         losses = [v_loss, q1_loss, q2_loss, pi_loss]
         if self.train_alpha:
-            alpha_loss = -torch.mean(self.log_alpha * log_prob_new_act.detach() + self.target_entropy)
+            alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act.detach() + self.target_entropy).detach())
             losses.append(alpha_loss)
+        else:
+            losses.append(None)
         return losses
 
     def train_from_buffer(self):
@@ -480,6 +486,8 @@ class SoftActorCritic(nn.Module):
             "v": torch.optim.Adam(self.V.parameters(), lr=self.config.learning_rate_v),
             "pi": torch.optim.Adam(self.Policy.parameters(), lr=self.config.learning_rate_pi),
         }
+        if self.train_alpha:
+            optimizers["alpha"] = torch.optim.Adam([self.log_alpha], lr=self.config.learning_rate_alpha)
 
         # start training
         total_steps = 0
@@ -512,11 +520,16 @@ class SoftActorCritic(nn.Module):
                 if total_steps >= self.config.batch_size:
                     for _gradient_step in range(grad_steps):
                         # train the actor and critic models
-                        loss_v, loss_q1, loss_q2, loss_pi, *_ = self.train_from_buffer()
+                        loss_v, loss_q1, loss_q2, loss_pi, loss_alpha = self.train_from_buffer()
                         self.do_optimizer_step(optimizers["q1"], loss_q1)
                         self.do_optimizer_step(optimizers["q2"], loss_q2)
                         self.do_optimizer_step(optimizers["v"], loss_v)
                         self.do_optimizer_step(optimizers["pi"], loss_pi)
+
+                        if self.train_alpha:
+                            self.do_optimizer_step(optimizers["alpha"], loss_alpha)
+
+                        # TODO update by polyak averaging
 
                         history.update(
                             loss_pi=float(loss_pi.detach().numpy()),

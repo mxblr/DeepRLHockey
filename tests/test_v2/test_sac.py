@@ -72,5 +72,5 @@ class TestSAC(TestCase):
         self.assertIsInstance(a_rev, type(a))
 
     def test_train(self):
-        rewards = self.sac.train(epochs=2, max_steps=5, env_steps=1, grad_steps=1, n_burn_in_steps=1)
+        rewards = self.sac.train(epochs=2, max_steps=5, env_steps=1, grad_steps=1, n_burn_in_steps=1, n_log_epochs=100)
         self.assertTrue(rewards)
