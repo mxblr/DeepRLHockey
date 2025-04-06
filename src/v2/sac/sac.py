@@ -358,10 +358,6 @@ class SoftActorCritic(nn.Module):
 
         self.env = env
 
-        # self._init_update_target_V()  # TODO
-
-        # self._sess.run(self._update_target_V_ops_hard)  # TODO
-
     def load_weights(self, filepath):
         # TODO
         raise NotImplementedError("Loading model weights is not implemented yet")
@@ -456,6 +452,18 @@ class SoftActorCritic(nn.Module):
         # update weights
         optimizer.step()
 
+    def update_v_target(self):
+        target_multiplier = 1 - self.config.tau
+        source_multiplier = self.config.tau
+
+        # Finally, update target networks by polyak averaging.
+        with torch.no_grad():
+            for v, v_target in zip(self.V.parameters(), self.V_target.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                v_target.data.mul_(target_multiplier)
+                v_target.data.add_(source_multiplier * v.data)
+
     def train(
         self,
         epochs: int = 1000,
@@ -529,7 +537,7 @@ class SoftActorCritic(nn.Module):
                         if self.train_alpha:
                             self.do_optimizer_step(optimizers["alpha"], loss_alpha)
 
-                        # TODO update by polyak averaging
+                        self.update_v_target()
 
                         history.update(
                             loss_pi=float(loss_pi.detach().numpy()),

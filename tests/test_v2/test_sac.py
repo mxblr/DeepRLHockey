@@ -1,6 +1,7 @@
 from unittest import TestCase
 
 import gymnasium as gym
+import numpy as np
 import torch
 from torch import nn
 
@@ -60,11 +61,11 @@ class TestSAC(TestCase):
 
     def test_action(self):
         action = self.sac.action(torch.rand((1, self.config.pi_fct_config.input_dim)))
-        self.assertIsInstance(action, torch.Tensor)
+        self.assertIsInstance(action, np.ndarray)
 
     def test_greedy_action(self):
         action = self.sac.act_greedy(torch.rand((1, self.config.pi_fct_config.input_dim)))
-        self.assertIsInstance(action, torch.Tensor)
+        self.assertIsInstance(action, np.ndarray)
 
     def test_reverse_action(self):
         a = self.sac.env.action_space.sample()
@@ -72,5 +73,5 @@ class TestSAC(TestCase):
         self.assertIsInstance(a_rev, type(a))
 
     def test_train(self):
-        rewards = self.sac.train(epochs=2, max_steps=5, env_steps=1, grad_steps=1, n_burn_in_steps=1, n_log_epochs=100)
+        rewards = self.sac.train(epochs=5, max_steps=5, env_steps=1, grad_steps=1, n_burn_in_steps=1, n_log_epochs=100)
         self.assertTrue(rewards)
