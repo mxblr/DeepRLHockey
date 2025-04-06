@@ -55,7 +55,7 @@ class ValueFunctionConfig:
         hidden_layers: typing.List[int] = None,
         activation_function=nn.ReLU,
         output_activation_function=None,
-        weight_initializer=nn.init.xavier_uniform,
+        weight_initializer=nn.init.xavier_uniform_,
         bias_initializer=nn.init.zeros_,
     ):
         self.input_dim = input_dim
@@ -105,9 +105,9 @@ class NormalPolicyFunctionConfig:
         input_dim: int = 1,
         hidden_layers: typing.List[int] = None,
         activation_function=nn.ReLU,
-        output_activation_function_mu=None,
-        output_activation_function_log_std=nn.functional.tanh,
-        weight_initializer=nn.init.xavier_uniform,
+        output_activation_function_mu=torch.tanh,
+        output_activation_function_log_std=torch.tanh,
+        weight_initializer=nn.init.xavier_uniform_,
         bias_initializer=nn.init.zeros_,
         output_dim: int = 1,
         log_std_max: int = 2,
@@ -137,11 +137,10 @@ class MuEstimator(nn.Module):
         self.head = layer
         self.activation_fct = activation_fct
 
-
-def forward(self, inpt):
-    mu = self.head(inpt)
-    mu_activation_fct = self.activation_fct(mu)
-    return mu, mu_activation_fct
+    def forward(self, inpt):
+        mu = self.head(inpt)
+        mu_activation_fct = self.activation_fct(mu)
+        return mu, mu_activation_fct
 
 
 class StdEstimator(nn.Module):
@@ -162,8 +161,8 @@ class StdEstimator(nn.Module):
 
     def forward(self, inpt):
         log_std = self.head(inpt)
-        if self.activation_fct != nn.functional.tanh:
-            log_std = torch.clip(log_std, min=self.log_std_min, max=self.log_std_max)
+        if self.activation_fct != torch.tanh:
+            log_std = torch.clamp(log_std, min=self.log_std_min, max=self.log_std_max)
         else:
             log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
 
@@ -220,7 +219,7 @@ class NormalPolicyFunction(nn.Module):
         normal_dist = torch.distributions.MultivariateNormal(mu, std)
         sample = normal_dist.sample()
 
-        action = nn.functional.tanh(sample)
+        action = torch.tanh(sample)
         log_prob = self.gaussian_likelihood(sample=sample, mu=mu, log_std=log_std, std=std)
         _, _, log_prob = self.squashing_function(mu=mu, pi=sample, logp_pi=log_prob)
         return action, log_prob, mu_activation_fct, log_std, mu
@@ -229,16 +228,16 @@ class NormalPolicyFunction(nn.Module):
     def gaussian_likelihood(sample, mu, log_std, std):
         eps = 1e-6
         term_1 = torch.pow((sample - mu) / (std + eps), 2)
-        term_2 = 2 * log_std * torch.log(2 * torch.Tensor(math.pi))
+        term_2 = 2 * log_std * torch.log(2 * torch.Tensor([math.pi]))
         pre_sum = -0.5 * (term_1 + term_2)
         return torch.sum(pre_sum, dim=1)
 
     @staticmethod
     def squashing_function(mu, pi, logp_pi):
-        mu = nn.functional.tanh(mu)
-        pi = nn.functional.tanh(pi)
+        mu = torch.tanh(mu)
+        pi = torch.tanh(pi)
         eps = 1e-6
-        logp_pi -= torch.sum(torch.log(torch.clip(1 - torch.pow(pi, 2), 0, 1) + eps), dim=1)
+        logp_pi -= torch.sum(torch.log(torch.clamp(1 - torch.pow(pi, 2), 0, 1) + eps), dim=1)
         return mu, pi, logp_pi
 
 
