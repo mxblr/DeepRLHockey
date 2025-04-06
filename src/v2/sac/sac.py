@@ -1,3 +1,4 @@
+import math
 import typing
 
 import numpy as np
@@ -47,6 +48,200 @@ class ReplayBuffer:
         )
 
 
+class ValueFunctionConfig:
+    def __init__(
+        self,
+        input_dim: int = 1,
+        hidden_layers: typing.List[int] = None,
+        activation_function=nn.ReLU,
+        output_activation_function=None,
+        weight_initializer=nn.init.xavier_uniform,
+        bias_initializer=nn.init.zeros_,
+    ):
+        self.input_dim = input_dim
+        self.hidden_layers = hidden_layers or [256, 256]
+        self.activation_function = activation_function
+        self.output_activation_function = output_activation_function
+        self.weight_initializer = weight_initializer
+        self.bias_initializer = bias_initializer
+
+
+class ValueFunction(nn.Module):
+    def __init__(self, config: ValueFunctionConfig):
+        super().__init__()
+
+        self.config = config
+        layer_modules = []
+        inpt_size = self.config.input_dim
+        for hidden_dim in self.config.hidden_layers:
+            layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=hidden_dim))
+            inpt_size = hidden_dim
+
+        layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=1))
+        if self.config.output_activation_function is not None:
+            layer_modules.append(self.config.output_activation_function)
+
+        self.layers = nn.ModuleList(layer_modules)
+
+    def _get_layer(self, input_dim, output_dim):
+        layer = nn.Linear(in_features=input_dim, out_features=output_dim)
+        if self.config.weight_initializer is not None:
+            self.config.weight_initializer(layer.weight)
+        if self.config.bias_initializer:
+            self.config.bias_initializer(layer.bias)
+        return layer
+
+    def forward(self, inpt):
+        output = inpt
+        for layer in self.layers:
+            output = layer(output)
+
+        return output
+
+
+class NormalPolicyFunctionConfig:
+    def __init__(
+        self,
+        input_dim: int = 1,
+        hidden_layers: typing.List[int] = None,
+        activation_function=nn.ReLU,
+        output_activation_function_mu=None,
+        output_activation_function_log_std=nn.functional.tanh,
+        weight_initializer=nn.init.xavier_uniform,
+        bias_initializer=nn.init.zeros_,
+        output_dim: int = 1,
+        log_std_max: int = 2,
+        log_std_min: int = -20,
+    ):
+        self.input_dim = input_dim
+        self.hidden_layers = hidden_layers or [256, 256]
+        self.activation_function = activation_function
+        self.output_activation_function_mu = output_activation_function_mu
+        self.output_activation_function_log_std = output_activation_function_log_std
+        self.weight_initializer = weight_initializer
+        self.bias_initializer = bias_initializer
+        self.output_dim = output_dim
+        self.log_std_max = log_std_max
+        self.log_std_min = log_std_min
+
+
+class MuEstimator(nn.Module):
+    def __init__(self, input_dim, output_dim, activation_fct, weight_initializer, bias_initializer):
+        super(MuEstimator, self).__init__()
+        layer = nn.Linear(in_features=input_dim, out_features=output_dim)
+        if weight_initializer is not None:
+            weight_initializer(layer.weight)
+        if bias_initializer:
+            bias_initializer(layer.bias)
+
+        self.head = layer
+        self.activation_fct = activation_fct
+
+
+def forward(self, inpt):
+    mu = self.head(inpt)
+    mu_activation_fct = self.activation_fct(mu)
+    return mu, mu_activation_fct
+
+
+class StdEstimator(nn.Module):
+    def __init__(
+        self, input_dim, output_dim, activation_fct, weight_initializer, bias_initializer, log_std_min, log_std_max
+    ):
+        super(StdEstimator, self).__init__()
+        layer = nn.Linear(in_features=input_dim, out_features=output_dim)
+        if weight_initializer is not None:
+            weight_initializer(layer.weight)
+        if bias_initializer:
+            bias_initializer(layer.bias)
+
+        self.head = layer
+        self.activation_fct = activation_fct
+        self.log_std_max = log_std_max
+        self.log_std_min = log_std_min
+
+    def forward(self, inpt):
+        log_std = self.head(inpt)
+        if self.activation_fct != nn.functional.tanh:
+            log_std = torch.clip(log_std, min=self.log_std_min, max=self.log_std_max)
+        else:
+            log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
+
+        std = torch.exp(log_std)
+        return log_std, std
+
+
+class NormalPolicyFunction(nn.Module):
+    def __init__(self, config: NormalPolicyFunctionConfig):
+        super().__init__()
+
+        self.config = config
+        layer_modules = []
+        inpt_size = self.config.input_dim
+        for hidden_dim in self.config.hidden_layers:
+            layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=hidden_dim))
+            inpt_size = hidden_dim
+
+        self.layers = nn.ModuleList(layer_modules)
+        self.mu_estimator = MuEstimator(
+            input_dim=inpt_size,
+            output_dim=self.config.output_dim,
+            activation_fct=self.config.output_activation_function_mu,
+            weight_initializer=self.config.weight_initializer,
+            bias_initializer=self.config.bias_initializer,
+        )
+
+        self.std_estimator = StdEstimator(
+            input_dim=inpt_size,
+            output_dim=self.config.output_dim,
+            activation_fct=self.config.output_activation_function_log_std,
+            weight_initializer=self.config.weight_initializer,
+            bias_initializer=self.config.bias_initializer,
+            log_std_max=self.config.log_std_max,
+            log_std_min=self.config.log_std_min,
+        )
+
+    def _get_layer(self, input_dim, output_dim):
+        layer = nn.Linear(in_features=input_dim, out_features=output_dim)
+        if self.config.weight_initializer is not None:
+            self.config.weight_initializer(layer.weight)
+        if self.config.bias_initializer:
+            self.config.bias_initializer(layer.bias)
+        return layer
+
+    def forward(self, inpt):
+        output = inpt
+        for layer in self.layers:
+            output = layer(output)
+
+        mu, mu_activation_fct = self.mu_estimator(output)
+        log_std, std = self.std_estimator(output)
+
+        normal_dist = torch.distributions.MultivariateNormal(mu, std)
+        sample = normal_dist.sample()
+
+        action = nn.functional.tanh(sample)
+        log_prob = self.gaussian_likelihood(sample=sample, mu=mu, log_std=log_std, std=std)
+        _, _, log_prob = self.squashing_function(mu=mu, pi=sample, logp_pi=log_prob)
+        return action, log_prob, mu_activation_fct, log_std, mu
+
+    @staticmethod
+    def gaussian_likelihood(sample, mu, log_std, std):
+        eps = 1e-6
+        term_1 = torch.pow((sample - mu) / (std + eps), 2)
+        term_2 = 2 * log_std * torch.log(2 * torch.Tensor(math.pi))
+        pre_sum = -0.5 * (term_1 + term_2)
+        return torch.sum(pre_sum, dim=1)
+
+    @staticmethod
+    def squashing_function(mu, pi, logp_pi):
+        mu = nn.functional.tanh(mu)
+        pi = nn.functional.tanh(pi)
+        eps = 1e-6
+        logp_pi -= torch.sum(torch.log(torch.clip(1 - torch.pow(pi, 2), 0, 1) + eps), dim=1)
+        return mu, pi, logp_pi
+
+
 class SoftActorCriticConfig:
     """Configuration File for the Soft Actor Critic Algorithm"""
 
@@ -66,9 +261,9 @@ class SoftActorCriticConfig:
         dim_obs: int = 16,
         alpha: typing.Union[str, float] = "auto",
         target_entropy: typing.Union[str, float] = "auto",
-        q_fct_config=None,
-        v_fct_config=None,
-        pi_fct_config=None,
+        q_fct_config: ValueFunctionConfig = None,
+        v_fct_config: ValueFunctionConfig = None,
+        pi_fct_config: NormalPolicyFunctionConfig = None,
     ):
         self.tau = tau
         self.learning_rate_v = learning_rate_v
@@ -84,9 +279,9 @@ class SoftActorCriticConfig:
         self.dim_obs = dim_obs
         self.alpha = alpha
         self.target_entropy = target_entropy
-        self.q_fct_config = q_fct_config
-        self.v_fct_config = v_fct_config
-        self.pi_fct_config = pi_fct_config
+        self.q_fct_config = q_fct_config or ValueFunctionConfig()
+        self.v_fct_config = v_fct_config or ValueFunctionConfig()
+        self.pi_fct_config = pi_fct_config or NormalPolicyFunctionConfig()
 
 
 class SoftActorCritic(nn.Module):
@@ -102,7 +297,7 @@ class SoftActorCritic(nn.Module):
         input_space,
         action_space,
         ValueFunction: nn.Module,
-        PolicFunction: nn.Module,
+        PolicyFunction: nn.Module,
         env,
     ):
         """
@@ -122,6 +317,7 @@ class SoftActorCritic(nn.Module):
         :param save_path:      Path to the directory where you want to save your network weights and graphs
         :param user_config:    contains additional parameters saved in self._config dictionary
         """
+        super().__init__()
 
         self.input_space = input_space
         self.action_space = action_space
@@ -137,7 +333,7 @@ class SoftActorCritic(nn.Module):
         # set up the value, policy and q-function networks
         self.Q1 = ValueFunction(self.config.v_fct_config)
         self.Q2 = ValueFunction(self.config.v_fct_config)
-        self.Policy = PolicFunction(self.config.pi_fct_config)
+        self.Policy = PolicyFunction(self.config.pi_fct_config)
         self.V = ValueFunction(self.config.v_fct_config)
         self.V_target = ValueFunction(self.config.v_fct_config)
 
@@ -174,16 +370,16 @@ class SoftActorCritic(nn.Module):
         Returns a actions sampled from the Multivariate Normal defined by the Policy network
         observation:        observation for the agent in the form [[obs1, obs2, obs3,..., obs_n]]
         """
-        actions = self.Policy.act(observation)
-        return actions[0]
+        sampled_action, _sampled_action_log_prob, _greedy_action, _, _ = self.Policy(observation)
+        return sampled_action[0]
 
     def act_greedy(self, observation):
         """
         Returns the mean of the Multivariate Normal defined by the policy network - and therefore the greedy action.
         observation:        observation for the agent in the form [[obs1, obs2, obs3,..., obs_n]]
         """
-        actions = self.Policy.mu_tanh(observation)
-        return actions[0]
+        _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(observation)
+        return greedy_action[0]
 
     def reverse_action(self, action):
         """
@@ -201,7 +397,7 @@ class SoftActorCritic(nn.Module):
         """Calculate losses for a given set of observations, actions and rewards."""
         q1 = self.Q1(torch.cat([observation, action], dim=-1))
         q2 = self.Q2(torch.cat([observation, action], dim=-1))
-        pi_action, pi_log_prob, pi_log_std, pi_mu = self.Policy(observation)
+        pi_action, pi_log_prob, _, pi_log_std, pi_mu = self.Policy(observation)
 
         # calculate value of current and new observation
         v = self.V(observation)

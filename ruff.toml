@@ -2,7 +2,7 @@
 line-length = 120
 
 [lint]
-extend-select = ["I", "E", "F", "UP", "B", "SIM"]
+extend-select = ["I", "E", "F", "B", "SIM"]
 
 [format]
 docstring-code-format = true
