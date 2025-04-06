@@ -1,5 +1,6 @@
 import math
 import typing
+from copy import deepcopy
 
 import numpy as np
 import progressbar
@@ -337,6 +338,7 @@ class SoftActorCritic(nn.Module):
         self.Policy = policy_function(self.config.pi_fct_config)
         self.V = value_function(self.config.v_fct_config)
         self.V_target = value_function(self.config.v_fct_config)
+        self.V_target.weights = deepcopy(self.V.weights)
 
         # Alpha can also be trained
         self.target_entropy = self.config.target_entropy
