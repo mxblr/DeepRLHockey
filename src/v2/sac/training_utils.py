@@ -65,5 +65,5 @@ class TrainingHistory:
         if self.winning:
             axd["E"].plot(range(len(self.winning)), self.winning)
             axd["E"].set_title("Win fraction")
-
+        plt.tight_layout()
         plt.show()
