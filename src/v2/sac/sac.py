@@ -423,11 +423,12 @@ class SoftActorCritic(nn.Module):
             q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
 
         min_q1_q2 = torch.minimum(q1_pi, q2_pi)
-        target_v = min_q1_q2.detach() - self.alpha.detach() * (log_prob_new_act.detach() + log_prob_prior)
+        _alpha_no_grad = self.alpha.detach() if self.train_alpha else self.alpha
+        target_v = min_q1_q2.detach() - _alpha_no_grad * (log_prob_new_act.detach() + log_prob_prior)
         v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
 
         # PI update
-        pi_loss_kl = torch.mean(self.alpha.detach() * log_prob_new_act.detach() - q1_pi)
+        pi_loss_kl = torch.mean(_alpha_no_grad * log_prob_new_act - q1_pi)
         policy_regularization_loss = (
             0.001 * 0.5 * (torch.mean(torch.pow(pi_log_std, 2)) + torch.mean(torch.pow(pi_mu, 2)))
         )
@@ -435,7 +436,7 @@ class SoftActorCritic(nn.Module):
 
         losses = [v_loss, q1_loss, q2_loss, pi_loss]
         if self.train_alpha:
-            alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act.detach() + self.target_entropy).detach())
+            alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act + self.target_entropy).detach())
             losses.append(alpha_loss)
         else:
             losses.append(None)
