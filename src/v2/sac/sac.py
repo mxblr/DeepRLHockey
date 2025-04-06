@@ -39,12 +39,12 @@ class ReplayBuffer:
         :param batch_size: Number of buffer entries to sample.
         :return: Dictionary of observations, action, reward and whether the environment is done."""
         random_indices = np.random.randint(0, self.size, size=batch_size)
-        return dict(
-            obs1=self.obs1_buf[random_indices],
-            obs2=self.obs2_buf[random_indices],
-            acts=self.acts_buf[random_indices],
-            rews=self.rews_buf[random_indices],
-            done=self.done_buf[random_indices],
+        return (
+            torch.Tensor(self.obs1_buf[random_indices]),
+            torch.Tensor(self.acts_buf[random_indices]),
+            torch.Tensor(self.rews_buf[random_indices]),
+            torch.Tensor(self.obs2_buf[random_indices]),
+            torch.Tensor(self.done_buf[random_indices]),
         )
 
 
@@ -216,7 +216,9 @@ class NormalPolicyFunction(nn.Module):
         mu, mu_activation_fct = self.mu_estimator(output)
         log_std, std = self.std_estimator(output)
 
-        normal_dist = torch.distributions.MultivariateNormal(mu, std)
+        # The equivalent of tfp.distributions.MultivariateNormalDiag is Independent(Normal(loc, diag), 1), see:
+        # https://github.com/pytorch/pytorch/pull/11178#issuecomment-417902463
+        normal_dist = torch.distributions.Independent(torch.distributions.Normal(mu, std), 1)
         sample = normal_dist.sample()
 
         action = torch.tanh(sample)
@@ -237,7 +239,7 @@ class NormalPolicyFunction(nn.Module):
         mu = torch.tanh(mu)
         pi = torch.tanh(pi)
         eps = 1e-6
-        logp_pi -= torch.sum(torch.log(torch.clamp(1 - torch.pow(pi, 2), 0, 1) + eps), dim=1)
+        logp_pi = logp_pi - torch.sum(torch.log(torch.clamp(1 - torch.pow(pi, 2), 0, 1) + eps), dim=1)
         return mu, pi, logp_pi
 
 
@@ -403,8 +405,9 @@ class SoftActorCritic(nn.Module):
         v_target = self.V(observation_new)
 
         # Q function values for new actions
-        q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
-        q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
+        with torch.no_grad():
+            q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
+            q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
 
         # probability of actions sampled from Multivariate normal
         log_prob_new_act = pi_log_prob
@@ -417,7 +420,7 @@ class SoftActorCritic(nn.Module):
         q2_loss = 0.5 * torch.mean(torch.pow(target_q - q2, 2))
 
         # Target for value network
-        min_q1_q2 = torch.minimum(q1_pi, q2_pi)
+        min_q1_q2 = torch.minimum(q1_pi.detach(), q2_pi.detach())
         target_v = min_q1_q2.detach() - self.alpha.detach() * (log_prob_new_act.detach() + log_prob_prior)
         v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
 
@@ -426,7 +429,7 @@ class SoftActorCritic(nn.Module):
         policy_regularization_loss = (
             0.001 * 0.5 * (torch.mean(torch.pow(pi_log_std, 2)) + torch.mean(torch.pow(pi_mu, 2)))
         )
-        pi_loss = pi_loss_kl + policy_regularization_loss
+        pi_loss = policy_regularization_loss + pi_loss_kl
 
         losses = [v_loss, q1_loss, q2_loss, pi_loss]
         if self.train_alpha:
@@ -465,6 +468,8 @@ class SoftActorCritic(nn.Module):
         :param n_log_epochs:    Logging frequency in epochs. Defaults to 1.
         """
         bar = progressbar.ProgressBar(maxval=epochs)
+        bar.start()
+
         # Initialize training statistics
         history = TrainingHistory()
         optimizers = {
@@ -491,8 +496,7 @@ class SoftActorCritic(nn.Module):
                         a = self.reverse_action(a)
                     else:
                         # choose an action based on our model
-                        a = self.action(np.asarray(ob).reshape(1, self._o_space.shape[0]))
-                        a = a[0]
+                        a = self.action(torch.Tensor(ob).view(1, self.config.dim_obs))
 
                     # execute the action and receive updated observations and reward
                     ob_new, reward, env_done, *_info = self.env.step(a)
@@ -513,10 +517,10 @@ class SoftActorCritic(nn.Module):
                         self.do_optimizer_step(optimizers["pi"], loss_pi)
 
                         history.update(
-                            loss_pi=loss_pi.numpy()[0],
-                            loss_q1=loss_q1.numpy()[0],
-                            loss_q2=loss_q2.numpy()[0],
-                            loss_v=loss_v.numpy()[0],
+                            loss_pi=float(loss_pi.detach().numpy()),
+                            loss_q1=float(loss_q1.detach().numpy()),
+                            loss_q2=float(loss_q2.detach().numpy()),
+                            loss_v=float(loss_v.detach().numpy()),
                         )
                 total_steps += 1
                 if env_done:

@@ -24,6 +24,9 @@ class TestSAC(TestCase):
             q_fct_config=ValueFunctionConfig(input_dim=4),
             v_fct_config=ValueFunctionConfig(input_dim=3),
             pi_fct_config=NormalPolicyFunctionConfig(input_dim=3),
+            batch_size=4,
+            dim_obs=3,
+            dim_act=1,
         )
 
         self.sac = SoftActorCritic(
@@ -67,3 +70,7 @@ class TestSAC(TestCase):
         a = self.sac.env.action_space.sample()
         a_rev = self.sac.reverse_action(a)
         self.assertIsInstance(a_rev, type(a))
+
+    def test_train(self):
+        rewards = self.sac.train(epochs=2, max_steps=5, env_steps=1, grad_steps=1, n_burn_in_steps=1)
+        self.assertTrue(rewards)
