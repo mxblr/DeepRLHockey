@@ -67,3 +67,19 @@ class TrainingHistory:
             axd["E"].set_title("Win fraction")
         plt.tight_layout()
         plt.show()
+
+    def stdout(self):
+        out_string = ""
+        if self.episode_rewards:
+            out_string += "Reward: " + str(self.episode_rewards[-1]) + " | "
+        if self.total_loss_V:
+            out_string += "V-loss: " + str(self.total_loss_V[-1]) + " | "
+        if self.total_loss_Q1:
+            out_string += "Q1-loss " + str(self.total_loss_Q1[-1]) + " | "
+        if self.total_loss_Q2:
+            out_string += "Q2-loss: " + str(self.total_loss_Q2[-1]) + " | "
+        if self.total_loss_PI:
+            out_string += "PI-loss: " + str(self.total_loss_PI[-1]) + " | "
+        if self.winning:
+            out_string += "Winning: " + str(self.winning[-1]) + " | "
+        print(out_string)
