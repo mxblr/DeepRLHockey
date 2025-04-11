@@ -13,11 +13,12 @@ from src.v2.sac.sac import (
     ValueFunction,
     ValueFunctionConfig,
 )
+from src.v2.sac.training_utils import NormalizedActions
 
 
 class TestSAC(TestCase):
     def setUp(self) -> None:
-        env = gym.make("Pendulum-v1")
+        env = NormalizedActions(gym.make("Pendulum-v1"))
         ac_space = env.action_space
         o_space = env.observation_space
 
@@ -69,9 +70,17 @@ class TestSAC(TestCase):
 
     def test_reverse_action(self):
         a = self.sac.env.action_space.sample()
-        a_rev = self.sac.reverse_action(a)
+        a_rev = self.sac.env.reverse_action(a)
         self.assertIsInstance(a_rev, type(a))
 
     def test_train(self):
-        rewards = self.sac.train(epochs=5, max_steps=5, env_steps=1, grad_steps=1, n_burn_in_steps=1, n_log_epochs=100)
+        rewards = self.sac.train(
+            epochs=5,
+            max_steps=5,
+            env_steps=1,
+            grad_steps=1,
+            n_burn_in_steps=1,
+            n_log_epochs=100,
+            log_output="stdout",
+        )
         self.assertTrue(rewards)
