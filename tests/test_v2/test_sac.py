@@ -43,25 +43,33 @@ class TestSAC(TestCase):
     def test_setup(self):
         self.assertIsInstance(self.sac, nn.Module)
 
-    def test_forward_pass(self):
+    def test_get_q_losses(self):
         ob, _info = self.sac.env.reset()
         a = self.sac.env.action_space.sample()
         ob_new, reward, env_done, *_info = self.sac.env.step(a)
 
-        losses = self.sac.forward(
+        losses = self.sac.get_q_losses(
             observation=torch.Tensor([ob]),
             action=torch.Tensor([a]),
             reward=torch.Tensor([reward]),
             observation_new=torch.Tensor([ob_new]),
             env_done=torch.Tensor([env_done]),
         )
-        self.assertEqual(len(losses), 5)
-        for loss in losses:
+        self.assertEqual({"q1", "q2"}, set(losses.keys()))
+        for loss in losses.values():
+            self.assertIsInstance(loss, torch.Tensor)
+            self.assertTrue(loss.requires_grad)
+
+    def test_get_v_pi_alpha_losses(self):
+        ob, _info = self.sac.env.reset()
+        losses = self.sac.get_v_pi_alpha_losses(torch.Tensor([ob]))
+        self.assertEqual({"v", "pi", "alpha"}, set(losses.keys()))
+        for loss in losses.values():
             self.assertIsInstance(loss, torch.Tensor)
             self.assertTrue(loss.requires_grad)
 
     def test_action(self):
-        action = self.sac.action(torch.rand((1, self.config.pi_fct_config.input_dim)))
+        action = self.sac.forward(torch.rand((1, self.config.pi_fct_config.input_dim)))
         self.assertIsInstance(action, np.ndarray)
 
     def test_greedy_action(self):
