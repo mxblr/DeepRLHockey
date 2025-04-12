@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.v2.sac.training_utils import TrainingHistory
+from src.v2.sac.training_utils import NormalizedActions, TrainingHistory
 
 
 class ReplayBuffer:
@@ -275,6 +275,7 @@ class SoftActorCriticConfig:
         v_fct_config: ValueFunctionConfig = None,
         pi_fct_config: NormalPolicyFunctionConfig = None,
         max_grad_norm: float = None,
+        normalize_actions: bool = True,
     ):
         self.tau = tau
         self.learning_rate_v = learning_rate_v
@@ -294,6 +295,7 @@ class SoftActorCriticConfig:
         self.v_fct_config = v_fct_config or ValueFunctionConfig()
         self.pi_fct_config = pi_fct_config or NormalPolicyFunctionConfig()
         self.max_grad_norm = max_grad_norm
+        self.normalize_actions = normalize_actions
 
 
 class SoftActorCritic(nn.Module):
@@ -367,7 +369,7 @@ class SoftActorCritic(nn.Module):
             self.log_alpha = nn.Parameter(torch.tensor(float(np.log(self.config.initial_alpha)), dtype=torch.float32))
             self.alpha = torch.exp(self.log_alpha)
 
-        self.env = env
+        self.env = NormalizedActions(env) if self.config.normalize_actions else env
 
     def load_weights(self, filepath):
         # TODO
@@ -508,7 +510,8 @@ class SoftActorCritic(nn.Module):
                         # sampled from the normal action space
                         a = self.env.action_space.sample()
                         # normalize
-                        a = self.env.reverse_action(a)
+                        if self.config.normalize_actions:
+                            a = self.env.reverse_action(a)
                     else:
                         # choose an action based on our model
                         a = self.forward(torch.as_tensor(ob).view(1, self.config.dim_obs))
@@ -600,6 +603,8 @@ class SoftActorCritic(nn.Module):
         return history.episode_rewards
 
     def run_agent_on_env(self, env, greedy_action: bool = True, max_steps: int = 100):
+        env = NormalizedActions(env) if self.config.normalize_actions else env
+
         ob, _info = env.reset()
         total_reward = 0
         for _step in range(max_steps):
