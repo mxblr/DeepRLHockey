@@ -96,11 +96,7 @@ class ValueFunction(nn.Module):
         return layer
 
     def forward(self, inpt):
-        output = inpt
-        # for layer in self.layers:
-        output = self.layers(output)
-
-        return output
+        return self.layers(inpt)
 
 
 class NormalPolicyFunctionConfig:
@@ -381,7 +377,7 @@ class SoftActorCritic(nn.Module):
         # TODO
         raise NotImplementedError("Saving model is not implemented yet.")
 
-    def action(self, observation):
+    def forward(self, observation):
         """
         Returns a actions sampled from the Multivariate Normal defined by the Policy network
         observation:        observation for the agent in the form [[obs1, obs2, obs3,..., obs_n]]
@@ -401,26 +397,23 @@ class SoftActorCritic(nn.Module):
             _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(observation)
         return greedy_action.numpy()[0]
 
-    def forward(self, observation, action, reward, observation_new, env_done):
-        """Calculate losses for a given set of observations, actions and rewards."""
+    def get_q_losses(self, observation, action, reward, observation_new, env_done):
         # ------------------------------- Calculate Q losses -------------------------------
         q1 = self.Q1(torch.cat((observation, action), dim=-1))
         q2 = self.Q2(torch.cat((observation, action), dim=-1))
 
         with torch.no_grad():
             v_target_val = self.V_target(observation_new)
-            target_q = reward + self.config.discount * (1 - env_done) * v_target_val
+            target_q = reward.view(-1, 1) + (self.config.discount * (1 - env_done)).view(-1, 1) * v_target_val
 
         # Target for Q function
         q1_loss = 0.5 * torch.mean(torch.pow(target_q - q1, 2))
         q2_loss = 0.5 * torch.mean(torch.pow(target_q - q2, 2))
+        return {"q1": q1_loss, "q2": q2_loss}
 
+    def get_v_pi_alpha_losses(self, observation):
+        """Calculate losses for a given set of observations, actions and rewards."""
         # ------------------------------- Calculate Policy loss -------------------------------
-
-        q_params = itertools.chain(self.Q1.parameters(), self.Q2.parameters())
-
-        for param in q_params:
-            param.requires_grad = False
 
         # action, log_prob, mu_activation_fct, log_std, mu
         pi_action, log_prob_new_act, _, pi_log_std, pi_mu = self.Policy(observation)
@@ -428,13 +421,9 @@ class SoftActorCritic(nn.Module):
         q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
         q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
 
-        for param in q_params:
-            param.requires_grad = True
-
-        min_q1_q2 = torch.minimum(q1_pi.detach(), q2_pi.detach())
         # PI update
         _alpha_no_grad = self.alpha.detach() if self.train_alpha else self.alpha
-        pi_loss_kl = torch.mean(_alpha_no_grad * log_prob_new_act - q1_pi)
+        pi_loss_kl = torch.mean((_alpha_no_grad * log_prob_new_act).view(-1, 1) - q1_pi)
         policy_regularization_loss = (
             0.001 * 0.5 * (torch.mean(torch.pow(pi_log_std, 2)) + torch.mean(torch.pow(pi_mu, 2)))
         )
@@ -443,22 +432,19 @@ class SoftActorCritic(nn.Module):
         # ------------------------------- Calculate Value loss -------------------------------
         # Uniform normal assumed - therefore prior is 0
         log_prob_prior = 0.0
-        target_v = min_q1_q2.detach() - _alpha_no_grad * (log_prob_new_act.detach() + log_prob_prior)
+        min_q1_q2 = torch.minimum(q1_pi.detach(), q2_pi.detach())
+        target_v = min_q1_q2.detach() - _alpha_no_grad * (log_prob_new_act.detach().view(-1, 1) + log_prob_prior)
         # calculate value of current and new observation
         v = self.V(observation)
         v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
 
-        losses = {"v": v_loss, "q1": q1_loss, "q2": q2_loss, "pi": pi_loss}
+        losses = {"v": v_loss, "pi": pi_loss}
         if self.train_alpha:
             alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act.detach() + self.target_entropy).detach())
             losses["alpha"] = alpha_loss
         else:
             losses["alpha"] = None
         return losses
-
-    def train_from_buffer(self):
-        observation, action, reward, observation_new, env_done = self.buffer.sample_batch(self.config.batch_size)
-        return self.forward(observation, action, reward, observation_new, env_done)
 
     def update_v_target(self):
         target_multiplier = 1 - self.config.tau
@@ -525,7 +511,7 @@ class SoftActorCritic(nn.Module):
                         a = self.env.reverse_action(a)
                     else:
                         # choose an action based on our model
-                        a = self.action(torch.as_tensor(ob).view(1, self.config.dim_obs))
+                        a = self(torch.as_tensor(ob).view(1, self.config.dim_obs))
 
                     # execute the action and receive updated observations and reward
                     ob_new, reward, terminated, truncated, *_info = self.env.step(a)
@@ -540,23 +526,38 @@ class SoftActorCritic(nn.Module):
                 if total_steps >= self.config.batch_size:
                     for _gradient_step in range(grad_steps):
                         # train the actor and critic models
-                        losses = self.train_from_buffer()
+                        batch_observation, batch_action, batch_reward, batch_observation_new, batch_env_done = (
+                            self.buffer.sample_batch(self.config.batch_size)
+                        )
+                        q_losses = self.get_q_losses(
+                            batch_observation, batch_action, batch_reward, batch_observation_new, batch_env_done
+                        )
 
                         optimizers["q1"].zero_grad()
-                        losses["q1"].backward()
+                        q_losses["q1"].backward()
 
                         optimizers["q2"].zero_grad()
-                        losses["q2"].backward()
+                        q_losses["q2"].backward()
+
+                        optimizers["q1"].step()
+                        optimizers["q2"].step()
+
+                        # optimize value and policy networks
+                        q_params = itertools.chain(self.Q1.parameters(), self.Q2.parameters())
+                        for param in q_params:
+                            param.requires_grad = False
+
+                        v_pi_alpha_losses = self.get_v_pi_alpha_losses(batch_observation)
 
                         optimizers["v"].zero_grad()
-                        losses["v"].backward()
+                        v_pi_alpha_losses["v"].backward()
 
                         optimizers["pi"].zero_grad()
-                        losses["pi"].backward()
+                        v_pi_alpha_losses["pi"].backward()
 
                         if self.train_alpha:
                             optimizers["alpha"].zero_grad()
-                            losses["alpha"].backward()
+                            v_pi_alpha_losses["alpha"].backward()
 
                         if self.config.max_grad_norm is not None:
                             for optimizer in optimizers.values():
@@ -564,22 +565,23 @@ class SoftActorCritic(nn.Module):
                                     parameters=optimizer.param_groups[0]["params"], max_norm=self.config.max_grad_norm
                                 )
 
-                        optimizers["q1"].step()
-                        optimizers["q2"].step()
                         optimizers["v"].step()
                         optimizers["pi"].step()
 
                         if self.train_alpha:
                             optimizers["alpha"].step()
 
-                        self.update_v_target()
+                        q_params = itertools.chain(self.Q1.parameters(), self.Q2.parameters())
+                        for param in q_params:
+                            param.requires_grad = True
 
-                        history.update(
-                            loss_pi=float(losses["pi"].detach().numpy()),
-                            loss_q1=float(losses["q1"].detach().numpy()),
-                            loss_q2=float(losses["q2"].detach().numpy()),
-                            loss_v=float(losses["v"].detach().numpy()),
-                        )
+                        self.update_v_target()
+                    history.update(
+                        loss_pi=float(v_pi_alpha_losses["pi"].detach().numpy()),
+                        loss_q1=float(q_losses["q1"].detach().numpy()),
+                        loss_q2=float(q_losses["q2"].detach().numpy()),
+                        loss_v=float(v_pi_alpha_losses["v"].detach().numpy()),
+                    )
                 total_steps += 1
                 if env_done:
                     break
