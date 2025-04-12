@@ -53,14 +53,12 @@ class ReplayBuffer:
 class ValueFunctionConfig:
     def __init__(
         self,
-        input_dim: int = 1,
         hidden_layers: typing.List[int] = None,
         activation_function=nn.ReLU,
         output_activation_function=None,
         weight_initializer=nn.init.xavier_uniform_,
         bias_initializer=nn.init.zeros_,
     ):
-        self.input_dim = input_dim
         self.hidden_layers = hidden_layers or [256, 256]
         self.activation_function = activation_function
         self.output_activation_function = output_activation_function
@@ -69,12 +67,12 @@ class ValueFunctionConfig:
 
 
 class ValueFunction(nn.Module):
-    def __init__(self, config: ValueFunctionConfig):
+    def __init__(self, config: ValueFunctionConfig, input_dim):
         super().__init__()
 
         self.config = config
         layer_modules = []
-        inpt_size = self.config.input_dim
+        inpt_size = input_dim
         for hidden_dim in self.config.hidden_layers:
             layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=hidden_dim))
             layer_modules.append(self.config.activation_function())
@@ -101,25 +99,21 @@ class ValueFunction(nn.Module):
 class NormalPolicyFunctionConfig:
     def __init__(
         self,
-        input_dim: int = 1,
         hidden_layers: typing.List[int] = None,
         activation_function=nn.ReLU,
         output_activation_function_mu=torch.tanh,
         output_activation_function_log_std=torch.tanh,
         weight_initializer=nn.init.xavier_uniform_,
         bias_initializer=nn.init.zeros_,
-        output_dim: int = 1,
         log_std_max: int = 2,
         log_std_min: int = -20,
     ):
-        self.input_dim = input_dim
         self.hidden_layers = hidden_layers or [256, 256]
         self.activation_function = activation_function
         self.output_activation_function_mu = output_activation_function_mu
         self.output_activation_function_log_std = output_activation_function_log_std
         self.weight_initializer = weight_initializer
         self.bias_initializer = bias_initializer
-        self.output_dim = output_dim
         self.log_std_max = log_std_max
         self.log_std_min = log_std_min
 
@@ -173,12 +167,12 @@ class StdEstimator(nn.Module):
 
 
 class NormalPolicyFunction(nn.Module):
-    def __init__(self, config: NormalPolicyFunctionConfig):
+    def __init__(self, config: NormalPolicyFunctionConfig, input_dim: int, output_dim: int):
         super().__init__()
 
         self.config = config
         layer_modules = []
-        inpt_size = self.config.input_dim
+        inpt_size = input_dim
         for hidden_dim in self.config.hidden_layers:
             layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=hidden_dim))
             layer_modules.append(self.config.activation_function())
@@ -187,7 +181,7 @@ class NormalPolicyFunction(nn.Module):
         self.layers = nn.Sequential(*layer_modules)
         self.mu_estimator = MuEstimator(
             input_dim=inpt_size,
-            output_dim=self.config.output_dim,
+            output_dim=output_dim,
             activation_fct=self.config.output_activation_function_mu,
             weight_initializer=self.config.weight_initializer,
             bias_initializer=self.config.bias_initializer,
@@ -195,7 +189,7 @@ class NormalPolicyFunction(nn.Module):
 
         self.std_estimator = StdEstimator(
             input_dim=inpt_size,
-            output_dim=self.config.output_dim,
+            output_dim=output_dim,
             activation_fct=self.config.output_activation_function_log_std,
             weight_initializer=self.config.weight_initializer,
             bias_initializer=self.config.bias_initializer,
@@ -247,8 +241,6 @@ class SoftActorCriticConfig:
         buffer_size: int = int(1e6),
         batch_size: int = 256,
         initial_alpha: float = 1.0,
-        dim_act: int = 3,
-        dim_obs: int = 16,
         alpha: typing.Union[str, float] = "auto",
         target_entropy: typing.Union[str, float] = "auto",
         q_fct_config: ValueFunctionConfig = None,
@@ -267,8 +259,6 @@ class SoftActorCriticConfig:
         self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.initial_alpha = initial_alpha
-        self.dim_act = dim_act
-        self.dim_obs = dim_obs
         self.alpha = alpha
         self.target_entropy = target_entropy
         self.q_fct_config = q_fct_config or ValueFunctionConfig()
@@ -288,10 +278,8 @@ class SoftActorCritic(nn.Module):
     def __init__(
         self,
         config: SoftActorCriticConfig,
-        input_space,
-        action_space,
-        value_function: nn.Module,
-        policy_function: nn.Module,
+        value_function: typing.Type[ValueFunction],
+        policy_function: typing.Type[NormalPolicyFunction],
         env,
     ):
         """
@@ -312,25 +300,29 @@ class SoftActorCritic(nn.Module):
         :param user_config:    contains additional parameters saved in self._config dictionary
         """
         super().__init__()
-
-        self.input_space = input_space
-        self.action_space = action_space
         self.config = config
+
+        self.env = NormalizedActions(env) if self.config.normalize_actions else env
+        self.input_space = self.env.observation_space
+        self.action_space = self.env.action_space
+
+        self.dim_obs, *_ = self.input_space.shape
+        self.dim_act, *_ = self.action_space.shape
 
         # Using OpenAIs buffer, because it lead to speed improvement
         self.buffer = ReplayBuffer(
-            obs_dim=self.config.dim_obs,
-            act_dim=self.config.dim_act,
+            obs_dim=self.dim_obs,
+            act_dim=self.dim_act,
             size=self.config.buffer_size,
         )
 
         # set up the value, policy and q-function networks
-        self.Q1 = value_function(self.config.q_fct_config)
-        self.Q2 = value_function(self.config.q_fct_config)
+        self.Q1 = value_function(self.config.q_fct_config, input_dim=self.dim_obs + self.dim_act)
+        self.Q2 = value_function(self.config.q_fct_config, input_dim=self.dim_obs + self.dim_act)
 
-        self.Policy = policy_function(self.config.pi_fct_config)
+        self.Policy = policy_function(self.config.pi_fct_config, input_dim=self.dim_obs, output_dim=self.dim_act)
 
-        self.V = value_function(self.config.v_fct_config)
+        self.V = value_function(self.config.v_fct_config, input_dim=self.dim_obs)
         self.V_target = deepcopy(self.V)
         for p in self.V_target.parameters():
             p.requires_grad = False
@@ -338,7 +330,7 @@ class SoftActorCritic(nn.Module):
         # Alpha can also be trained
         self.target_entropy = self.config.target_entropy
         if self.target_entropy == "auto":
-            self.target_entropy = -self.config.dim_act
+            self.target_entropy = -self.dim_act
         self.target_entropy = float(self.target_entropy)  # .cast(np.float32)
 
         # If you want to learn alpha it has to be set to 'auto'
@@ -348,8 +340,6 @@ class SoftActorCritic(nn.Module):
             self.train_alpha = True
             self.log_alpha = nn.Parameter(torch.tensor(float(np.log(self.config.initial_alpha)), dtype=torch.float32))
             self.alpha = torch.exp(self.log_alpha)
-
-        self.env = NormalizedActions(env) if self.config.normalize_actions else env
 
     def load_weights(self, filepath):
         # TODO
@@ -461,7 +451,7 @@ class SoftActorCritic(nn.Module):
         bar.start()
 
         # Initialize training statistics
-        history = TrainingHistory()
+        history = TrainingHistory(log_target=log_output)
         optimizers = {
             "q1": torch.optim.Adam(self.Q1.parameters(), lr=self.config.learning_rate_q),
             "q2": torch.optim.Adam(self.Q2.parameters(), lr=self.config.learning_rate_q),
@@ -491,7 +481,7 @@ class SoftActorCritic(nn.Module):
                             a = self.env.reverse_action(a)
                     else:
                         # choose an action based on our model
-                        a = self.forward(torch.as_tensor(ob).view(1, self.config.dim_obs))
+                        a = self.forward(torch.as_tensor(ob).view(1, self.dim_obs))
 
                     # execute the action and receive updated observations and reward
                     ob_new, reward, terminated, truncated, *_info = self.env.step(a)

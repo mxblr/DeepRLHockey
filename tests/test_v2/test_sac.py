@@ -13,30 +13,23 @@ from src.v2.sac.sac import (
     ValueFunction,
     ValueFunctionConfig,
 )
-from src.v2.sac.training_utils import NormalizedActions
 
 
 class TestSAC(TestCase):
     def setUp(self) -> None:
-        env = NormalizedActions(gym.make("Pendulum-v1"))
-        ac_space = env.action_space
-        o_space = env.observation_space
+        env = gym.make("Pendulum-v1")
 
         self.config = SoftActorCriticConfig(
-            q_fct_config=ValueFunctionConfig(input_dim=4),
-            v_fct_config=ValueFunctionConfig(input_dim=3),
-            pi_fct_config=NormalPolicyFunctionConfig(input_dim=3),
+            q_fct_config=ValueFunctionConfig(),
+            v_fct_config=ValueFunctionConfig(),
+            pi_fct_config=NormalPolicyFunctionConfig(),
             batch_size=4,
-            dim_obs=3,
-            dim_act=1,
         )
 
         self.sac = SoftActorCritic(
             self.config,
             policy_function=NormalPolicyFunction,
             value_function=ValueFunction,
-            input_space=o_space,
-            action_space=ac_space,
             env=env,
         )
 
@@ -69,11 +62,11 @@ class TestSAC(TestCase):
             self.assertTrue(loss.requires_grad)
 
     def test_action(self):
-        action = self.sac.forward(torch.rand((1, self.config.pi_fct_config.input_dim)))
+        action = self.sac.forward(torch.rand((1, 3)))
         self.assertIsInstance(action, np.ndarray)
 
     def test_greedy_action(self):
-        action = self.sac.act_greedy(torch.rand((1, self.config.pi_fct_config.input_dim)))
+        action = self.sac.act_greedy(torch.rand((1, 3)))
         self.assertIsInstance(action, np.ndarray)
 
     def test_reverse_action(self):
