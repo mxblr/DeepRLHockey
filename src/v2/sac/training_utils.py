@@ -11,6 +11,7 @@ class TrainingHistory:
         self.total_loss_Q1 = []
         self.total_loss_Q2 = []
         self.total_loss_PI = []
+        self.total_loss_alpha = []
         self.winning = []
 
     def update(
@@ -21,6 +22,7 @@ class TrainingHistory:
         loss_q1: float = None,
         loss_q2: float = None,
         loss_pi: float = None,
+        loss_alpha: float = None,
         won_episode: int = None,
     ):
         if episode_reward:
@@ -33,6 +35,8 @@ class TrainingHistory:
             self.total_loss_Q2.append(loss_q2)
         if loss_pi:
             self.total_loss_PI.append(loss_pi)
+        if loss_alpha:
+            self.total_loss_alpha.append(loss_alpha)
         if won_episode:
             self.winning.append(won_episode)
 
@@ -45,7 +49,7 @@ class TrainingHistory:
                 AABB
                 CCDD
                 """
-        if self.winning:
+        if self.winning or self.total_loss_alpha:
             mosaic = """
                     AABB
                     CCDD
@@ -65,8 +69,12 @@ class TrainingHistory:
         axd["D"].set_title("PI Loss")
 
         if self.winning:
-            axd["E"].plot(range(len(self.winning)), self.winning)
+            axd["E"].plot(range(len(self.winning)), self.winning, c="g")
             axd["E"].set_title("Win fraction")
+        elif self.total_loss_alpha:
+            axd["E"].plot(range(len(self.total_loss_alpha)), self.total_loss_alpha, c="b")
+            axd["E"].set_title("Alpha Loss")
+
         plt.tight_layout()
         plt.show()
 

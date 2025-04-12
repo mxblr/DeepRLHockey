@@ -511,7 +511,7 @@ class SoftActorCritic(nn.Module):
                         a = self.env.reverse_action(a)
                     else:
                         # choose an action based on our model
-                        a = self(torch.as_tensor(ob).view(1, self.config.dim_obs))
+                        a = self.forward(torch.as_tensor(ob).view(1, self.config.dim_obs))
 
                     # execute the action and receive updated observations and reward
                     ob_new, reward, terminated, truncated, *_info = self.env.step(a)
@@ -576,12 +576,13 @@ class SoftActorCritic(nn.Module):
                             param.requires_grad = True
 
                         self.update_v_target()
-                    history.update(
-                        loss_pi=float(v_pi_alpha_losses["pi"].detach().numpy()),
-                        loss_q1=float(q_losses["q1"].detach().numpy()),
-                        loss_q2=float(q_losses["q2"].detach().numpy()),
-                        loss_v=float(v_pi_alpha_losses["v"].detach().numpy()),
-                    )
+                        history.update(
+                            loss_pi=float(v_pi_alpha_losses["pi"].detach().numpy()),
+                            loss_q1=float(q_losses["q1"].detach().numpy()),
+                            loss_q2=float(q_losses["q2"].detach().numpy()),
+                            loss_v=float(v_pi_alpha_losses["v"].detach().numpy()),
+                            loss_alpha=float(v_pi_alpha_losses["alpha"].detach().numpy()) if self.train_alpha else None,
+                        )
                 total_steps += 1
                 if env_done:
                     break
@@ -597,3 +598,16 @@ class SoftActorCritic(nn.Module):
             bar.update(epoch)
 
         return history.episode_rewards
+
+    def run_agent_on_env(self, env, greedy_action: bool = True, max_steps: int = 100):
+        ob, _info = env.reset()
+        total_reward = 0
+        for _step in range(max_steps):
+            ob = torch.as_tensor(ob).view(1, self.config.dim_obs)
+            a = self.act_greedy(ob) if greedy_action else self.forward(ob)
+            ob, reward, terminated, truncated, *_info = env.step(a)
+            _env_done = terminated or truncated
+            total_reward += reward
+
+        env.close()
+        return total_reward
