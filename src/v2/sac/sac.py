@@ -1,3 +1,4 @@
+import itertools
 import math
 import typing
 from copy import deepcopy
@@ -6,6 +7,7 @@ import numpy as np
 import progressbar
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.v2.sac.training_utils import TrainingHistory
 
@@ -76,13 +78,14 @@ class ValueFunction(nn.Module):
         inpt_size = self.config.input_dim
         for hidden_dim in self.config.hidden_layers:
             layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=hidden_dim))
+            layer_modules.append(self.config.activation_function())
             inpt_size = hidden_dim
 
         layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=1))
         if self.config.output_activation_function is not None:
             layer_modules.append(self.config.output_activation_function)
 
-        self.layers = nn.ModuleList(layer_modules)
+        self.layers = nn.Sequential(*layer_modules)
 
     def _get_layer(self, input_dim, output_dim):
         layer = nn.Linear(in_features=input_dim, out_features=output_dim)
@@ -94,8 +97,8 @@ class ValueFunction(nn.Module):
 
     def forward(self, inpt):
         output = inpt
-        for layer in self.layers:
-            output = layer(output)
+        # for layer in self.layers:
+        output = self.layers(output)
 
         return output
 
@@ -162,6 +165,9 @@ class StdEstimator(nn.Module):
 
     def forward(self, inpt):
         log_std = self.head(inpt)
+        if self.activation_fct:
+            log_std = self.activation_fct(log_std)
+
         if self.activation_fct != torch.tanh:
             log_std = torch.clamp(log_std, min=self.log_std_min, max=self.log_std_max)
         else:
@@ -180,9 +186,10 @@ class NormalPolicyFunction(nn.Module):
         inpt_size = self.config.input_dim
         for hidden_dim in self.config.hidden_layers:
             layer_modules.append(self._get_layer(input_dim=inpt_size, output_dim=hidden_dim))
+            layer_modules.append(self.config.activation_function())
             inpt_size = hidden_dim
 
-        self.layers = nn.ModuleList(layer_modules)
+        self.layers = nn.Sequential(*layer_modules)
         self.mu_estimator = MuEstimator(
             input_dim=inpt_size,
             output_dim=self.config.output_dim,
@@ -211,20 +218,25 @@ class NormalPolicyFunction(nn.Module):
 
     def forward(self, inpt):
         output = inpt
-        for layer in self.layers:
-            output = layer(output)
+        # for layer in self.layers:
+        output = self.layers(output)
 
         mu, mu_activation_fct = self.mu_estimator(output)
         log_std, std = self.std_estimator(output)
 
         # The equivalent of tfp.distributions.MultivariateNormalDiag is Independent(Normal(loc, diag), 1), see:
         # https://github.com/pytorch/pytorch/pull/11178#issuecomment-417902463
-        normal_dist = torch.distributions.Independent(torch.distributions.Normal(mu, std), 1)
-        sample = normal_dist.sample()
 
+        normal_dist = torch.distributions.Independent(torch.distributions.Normal(mu, std), 1)
+        # normal_dist = torch.distributions.Normal(mu, std)
+        sample = normal_dist.rsample()
+
+        log_prob = normal_dist.log_prob(sample)  # .sum(dim=-1)
+        log_prob -= 2 * (np.log(2) - sample - F.softplus(-2 * sample)).sum(dim=1)
+
+        # log_prob = self.gaussian_likelihood(sample=sample, mu=mu, log_std=log_std, std=std)
+        # _, _, log_prob = self.squashing_function(mu=mu, pi=sample, logp_pi=log_prob)
         action = torch.tanh(sample)
-        log_prob = self.gaussian_likelihood(sample=sample, mu=mu, log_std=log_std, std=std)
-        _, _, log_prob = self.squashing_function(mu=mu, pi=sample, logp_pi=log_prob)
         return action, log_prob, mu_activation_fct, log_std, mu
 
     @staticmethod
@@ -237,8 +249,8 @@ class NormalPolicyFunction(nn.Module):
 
     @staticmethod
     def squashing_function(mu, pi, logp_pi):
-        mu = torch.tanh(mu)
-        pi = torch.tanh(pi)
+        # mu = torch.tanh(mu)
+        # pi = torch.tanh(pi)
         eps = 1e-6
         logp_pi = logp_pi - torch.sum(torch.log(torch.clamp(1 - torch.pow(pi, 2), 0, 1) + eps), dim=1)
         return mu, pi, logp_pi
@@ -266,6 +278,7 @@ class SoftActorCriticConfig:
         q_fct_config: ValueFunctionConfig = None,
         v_fct_config: ValueFunctionConfig = None,
         pi_fct_config: NormalPolicyFunctionConfig = None,
+        max_grad_norm: float = None,
     ):
         self.tau = tau
         self.learning_rate_v = learning_rate_v
@@ -284,6 +297,7 @@ class SoftActorCriticConfig:
         self.q_fct_config = q_fct_config or ValueFunctionConfig()
         self.v_fct_config = v_fct_config or ValueFunctionConfig()
         self.pi_fct_config = pi_fct_config or NormalPolicyFunctionConfig()
+        self.max_grad_norm = max_grad_norm
 
 
 class SoftActorCritic(nn.Module):
@@ -335,6 +349,7 @@ class SoftActorCritic(nn.Module):
         # set up the value, policy and q-function networks
         self.Q1 = value_function(self.config.q_fct_config)
         self.Q2 = value_function(self.config.q_fct_config)
+
         self.Policy = policy_function(self.config.pi_fct_config)
 
         self.V = value_function(self.config.v_fct_config)
@@ -386,72 +401,64 @@ class SoftActorCritic(nn.Module):
             _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(observation)
         return greedy_action.numpy()[0]
 
-    def reverse_action(self, action):
-        """
-        If a environment wrapper is used you can reverse it here.
-        """
-        low = self.action_space.low
-        high = self.action_space.high
-
-        action = 2 * (action - low) / (high - low) - 1
-        action = np.clip(action, low, high)
-
-        return action
-
     def forward(self, observation, action, reward, observation_new, env_done):
         """Calculate losses for a given set of observations, actions and rewards."""
+        # ------------------------------- Calculate Q losses -------------------------------
         q1 = self.Q1(torch.cat((observation, action), dim=-1))
         q2 = self.Q2(torch.cat((observation, action), dim=-1))
-        pi_action, log_prob_new_act, _, pi_log_std, pi_mu = self.Policy(observation)
 
-        # calculate value of current and new observation
-        v = self.V(observation)
-        v_target = self.V(observation_new)
-
-        # Uniform normal assumed - therefore prior is 0
-        log_prob_prior = 0.0
+        with torch.no_grad():
+            v_target_val = self.V_target(observation_new)
+            target_q = reward + self.config.discount * (1 - env_done) * v_target_val
 
         # Target for Q function
-        target_q = reward + self.config.discount * (1 - env_done) * v_target.detach()
         q1_loss = 0.5 * torch.mean(torch.pow(target_q - q1, 2))
         q2_loss = 0.5 * torch.mean(torch.pow(target_q - q2, 2))
 
-        # Target for value network
-        # Q function values for new actions
-        with torch.no_grad():
-            q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
-            q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
+        # ------------------------------- Calculate Policy loss -------------------------------
 
-        min_q1_q2 = torch.minimum(q1_pi, q2_pi)
-        _alpha_no_grad = self.alpha.detach() if self.train_alpha else self.alpha
-        target_v = min_q1_q2.detach() - _alpha_no_grad * (log_prob_new_act.detach() + log_prob_prior)
-        v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
+        q_params = itertools.chain(self.Q1.parameters(), self.Q2.parameters())
 
+        for param in q_params:
+            param.requires_grad = False
+
+        # action, log_prob, mu_activation_fct, log_std, mu
+        pi_action, log_prob_new_act, _, pi_log_std, pi_mu = self.Policy(observation)
+
+        q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
+        q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
+
+        for param in q_params:
+            param.requires_grad = True
+
+        min_q1_q2 = torch.minimum(q1_pi.detach(), q2_pi.detach())
         # PI update
+        _alpha_no_grad = self.alpha.detach() if self.train_alpha else self.alpha
         pi_loss_kl = torch.mean(_alpha_no_grad * log_prob_new_act - q1_pi)
         policy_regularization_loss = (
             0.001 * 0.5 * (torch.mean(torch.pow(pi_log_std, 2)) + torch.mean(torch.pow(pi_mu, 2)))
         )
-        pi_loss = policy_regularization_loss + pi_loss_kl
+        pi_loss = pi_loss_kl + policy_regularization_loss
 
-        losses = [v_loss, q1_loss, q2_loss, pi_loss]
+        # ------------------------------- Calculate Value loss -------------------------------
+        # Uniform normal assumed - therefore prior is 0
+        log_prob_prior = 0.0
+        target_v = min_q1_q2.detach() - _alpha_no_grad * (log_prob_new_act.detach() + log_prob_prior)
+        # calculate value of current and new observation
+        v = self.V(observation)
+        v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
+
+        losses = {"v": v_loss, "q1": q1_loss, "q2": q2_loss, "pi": pi_loss}
         if self.train_alpha:
-            alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act + self.target_entropy).detach())
-            losses.append(alpha_loss)
+            alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act.detach() + self.target_entropy).detach())
+            losses["alpha"] = alpha_loss
         else:
-            losses.append(None)
+            losses["alpha"] = None
         return losses
 
     def train_from_buffer(self):
         observation, action, reward, observation_new, env_done = self.buffer.sample_batch(self.config.batch_size)
         return self.forward(observation, action, reward, observation_new, env_done)
-
-    @staticmethod
-    def do_optimizer_step(optimizer, loss):
-        optimizer.zero_grad()
-        loss.backward()
-        # update weights
-        optimizer.step()
 
     def update_v_target(self):
         target_multiplier = 1 - self.config.tau
@@ -473,6 +480,7 @@ class SoftActorCritic(nn.Module):
         grad_steps: int = 1,
         n_burn_in_steps: int = 1000,
         n_log_epochs: int = 1,
+        log_output: str = "plot",
     ):
         """
         Internal training method, can be overwritten for other environments
@@ -511,14 +519,17 @@ class SoftActorCritic(nn.Module):
                 for _episode_step in range(env_steps):
                     if total_steps < n_burn_in_steps:
                         # choose random action during the burn in phase
+                        # sampled from the normal action space
                         a = self.env.action_space.sample()
-                        a = self.reverse_action(a)
+                        # normalize
+                        a = self.env.reverse_action(a)
                     else:
                         # choose an action based on our model
-                        a = self.action(torch.Tensor(ob).view(1, self.config.dim_obs))
+                        a = self.action(torch.as_tensor(ob).view(1, self.config.dim_obs))
 
                     # execute the action and receive updated observations and reward
-                    ob_new, reward, env_done, *_info = self.env.step(a)
+                    ob_new, reward, terminated, truncated, *_info = self.env.step(a)
+                    env_done = terminated or truncated
                     total_reward += reward
 
                     # store the action and observations
@@ -529,22 +540,45 @@ class SoftActorCritic(nn.Module):
                 if total_steps >= self.config.batch_size:
                     for _gradient_step in range(grad_steps):
                         # train the actor and critic models
-                        loss_v, loss_q1, loss_q2, loss_pi, loss_alpha = self.train_from_buffer()
-                        self.do_optimizer_step(optimizers["q1"], loss_q1)
-                        self.do_optimizer_step(optimizers["q2"], loss_q2)
-                        self.do_optimizer_step(optimizers["v"], loss_v)
-                        self.do_optimizer_step(optimizers["pi"], loss_pi)
+                        losses = self.train_from_buffer()
+
+                        optimizers["q1"].zero_grad()
+                        losses["q1"].backward()
+
+                        optimizers["q2"].zero_grad()
+                        losses["q2"].backward()
+
+                        optimizers["v"].zero_grad()
+                        losses["v"].backward()
+
+                        optimizers["pi"].zero_grad()
+                        losses["pi"].backward()
 
                         if self.train_alpha:
-                            self.do_optimizer_step(optimizers["alpha"], loss_alpha)
+                            optimizers["alpha"].zero_grad()
+                            losses["alpha"].backward()
+
+                        if self.config.max_grad_norm is not None:
+                            for optimizer in optimizers.values():
+                                torch.nn.utils.clip_grad_norm_(
+                                    parameters=optimizer.param_groups[0]["params"], max_norm=self.config.max_grad_norm
+                                )
+
+                        optimizers["q1"].step()
+                        optimizers["q2"].step()
+                        optimizers["v"].step()
+                        optimizers["pi"].step()
+
+                        if self.train_alpha:
+                            optimizers["alpha"].step()
 
                         self.update_v_target()
 
                         history.update(
-                            loss_pi=float(loss_pi.detach().numpy()),
-                            loss_q1=float(loss_q1.detach().numpy()),
-                            loss_q2=float(loss_q2.detach().numpy()),
-                            loss_v=float(loss_v.detach().numpy()),
+                            loss_pi=float(losses["pi"].detach().numpy()),
+                            loss_q1=float(losses["q1"].detach().numpy()),
+                            loss_q2=float(losses["q2"].detach().numpy()),
+                            loss_v=float(losses["v"].detach().numpy()),
                         )
                 total_steps += 1
                 if env_done:
@@ -552,7 +586,12 @@ class SoftActorCritic(nn.Module):
 
             history.update(episode_reward=total_reward)
             if epoch % n_log_epochs == 0:
-                history.plot()
+                if log_output == "plot":
+                    history.plot()
+                elif log_output == "stdout":
+                    history.stdout()
+                else:
+                    raise NotImplementedError(f"Output {log_output!r} is not implemented.")
             bar.update(epoch)
 
         return history.episode_rewards
