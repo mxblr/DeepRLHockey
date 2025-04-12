@@ -5,7 +5,7 @@ from IPython.core.display import clear_output
 
 
 class TrainingHistory:
-    def __init__(self):
+    def __init__(self, log_target="plot"):
         self.episode_rewards = []
         self.total_loss_V = []
         self.total_loss_Q1 = []
@@ -13,6 +13,11 @@ class TrainingHistory:
         self.total_loss_PI = []
         self.total_loss_alpha = []
         self.winning = []
+
+        log_options = ["plot", "stdout"]
+        if log_target not in log_options:
+            raise ValueError(f"TrainingHistory does not support {log_target=} - choose one of {log_options}.")
+        self.log_target = log_target
 
     def update(
         self,
@@ -39,6 +44,14 @@ class TrainingHistory:
             self.total_loss_alpha.append(loss_alpha)
         if won_episode:
             self.winning.append(won_episode)
+
+    def __call__(self):
+        if self.log_target == "plot":
+            self.plot()
+        elif self.log_target == "stdout":
+            self.stdout()
+        else:
+            raise NotImplementedError(f"Output {self.log_target!r} is not implemented.")
 
     def plot(self):
         """

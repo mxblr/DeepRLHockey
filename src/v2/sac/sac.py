@@ -1,5 +1,4 @@
 import itertools
-import math
 import typing
 from copy import deepcopy
 
@@ -213,43 +212,24 @@ class NormalPolicyFunction(nn.Module):
         return layer
 
     def forward(self, inpt):
-        output = inpt
-        # for layer in self.layers:
-        output = self.layers(output)
+        output = self.layers(inpt)
 
         mu, mu_activation_fct = self.mu_estimator(output)
         log_std, std = self.std_estimator(output)
 
         # The equivalent of tfp.distributions.MultivariateNormalDiag is Independent(Normal(loc, diag), 1), see:
         # https://github.com/pytorch/pytorch/pull/11178#issuecomment-417902463
-
         normal_dist = torch.distributions.Independent(torch.distributions.Normal(mu, std), 1)
-        # normal_dist = torch.distributions.Normal(mu, std)
+
+        # sample an action from the distribution - using the re-parametrization trick (rsample) to make sure we can
+        # propagate the training signal back through the samplig
         sample = normal_dist.rsample()
 
         log_prob = normal_dist.log_prob(sample)  # .sum(dim=-1)
         log_prob -= 2 * (np.log(2) - sample - F.softplus(-2 * sample)).sum(dim=1)
 
-        # log_prob = self.gaussian_likelihood(sample=sample, mu=mu, log_std=log_std, std=std)
-        # _, _, log_prob = self.squashing_function(mu=mu, pi=sample, logp_pi=log_prob)
         action = torch.tanh(sample)
         return action, log_prob, mu_activation_fct, log_std, mu
-
-    @staticmethod
-    def gaussian_likelihood(sample, mu, log_std, std):
-        eps = 1e-6
-        term_1 = torch.pow((sample - mu) / (std + eps), 2)
-        term_2 = 2 * log_std * torch.log(2 * torch.Tensor([math.pi]))
-        pre_sum = -0.5 * (term_1 + term_2)
-        return torch.sum(pre_sum, dim=1)
-
-    @staticmethod
-    def squashing_function(mu, pi, logp_pi):
-        # mu = torch.tanh(mu)
-        # pi = torch.tanh(pi)
-        eps = 1e-6
-        logp_pi = logp_pi - torch.sum(torch.log(torch.clamp(1 - torch.pow(pi, 2), 0, 1) + eps), dim=1)
-        return mu, pi, logp_pi
 
 
 class SoftActorCriticConfig:
@@ -400,7 +380,7 @@ class SoftActorCritic(nn.Module):
         return greedy_action.numpy()[0]
 
     def get_q_losses(self, observation, action, reward, observation_new, env_done):
-        # ------------------------------- Calculate Q losses -------------------------------
+        """Calculate Q losses"""
         q1 = self.Q1(torch.cat((observation, action), dim=-1))
         q2 = self.Q2(torch.cat((observation, action), dim=-1))
 
@@ -414,10 +394,7 @@ class SoftActorCritic(nn.Module):
         return {"q1": q1_loss, "q2": q2_loss}
 
     def get_v_pi_alpha_losses(self, observation):
-        """Calculate losses for a given set of observations, actions and rewards."""
-        # ------------------------------- Calculate Policy loss -------------------------------
-
-        # action, log_prob, mu_activation_fct, log_std, mu
+        "Calculate losses for policy and value networks"
         pi_action, log_prob_new_act, _, pi_log_std, pi_mu = self.Policy(observation)
 
         q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
@@ -436,16 +413,15 @@ class SoftActorCritic(nn.Module):
         log_prob_prior = 0.0
         min_q1_q2 = torch.minimum(q1_pi.detach(), q2_pi.detach())
         target_v = min_q1_q2.detach() - _alpha_no_grad * (log_prob_new_act.detach().view(-1, 1) + log_prob_prior)
-        # calculate value of current and new observation
+
         v = self.V(observation)
         v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
 
         losses = {"v": v_loss, "pi": pi_loss}
+        alpha_loss = None
         if self.train_alpha:
             alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act.detach() + self.target_entropy).detach())
-            losses["alpha"] = alpha_loss
-        else:
-            losses["alpha"] = None
+        losses["alpha"] = alpha_loss
         return losses
 
     def update_v_target(self):
@@ -479,6 +455,7 @@ class SoftActorCritic(nn.Module):
         :param grad_steps:     number of training steps per iter_fit step
         :param n_burn_in_steps:        number of initial steps sampled from uniform distribution over actions
         :param n_log_epochs:    Logging frequency in epochs. Defaults to 1.
+        :param log_output: Where to log to based on the TrainingHistory class.
         """
         bar = progressbar.ProgressBar(maxval=epochs)
         bar.start()
@@ -592,17 +569,13 @@ class SoftActorCritic(nn.Module):
 
             history.update(episode_reward=total_reward)
             if epoch % n_log_epochs == 0:
-                if log_output == "plot":
-                    history.plot()
-                elif log_output == "stdout":
-                    history.stdout()
-                else:
-                    raise NotImplementedError(f"Output {log_output!r} is not implemented.")
+                history()
             bar.update(epoch)
 
         return history.episode_rewards
 
     def run_agent_on_env(self, env, greedy_action: bool = True, max_steps: int = 100):
+        """Run the agent on an environment"""
         env = NormalizedActions(env) if self.config.normalize_actions else env
 
         ob, _info = env.reset()
