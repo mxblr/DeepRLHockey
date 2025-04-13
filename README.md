@@ -26,4 +26,16 @@ In 2025 I chose to go with a PyTorch reimplementation, which you can find in `sr
 appear to have changed over time (no specific value function networks, ...), however I chose to go with the original 
 version I implemented during my student times.
 
+You can find an example on how to train SAC on `pendulum-v1` in `examples/train_sac_pendulum.py` to run it, make sure 
+to install all required dependencies, then execute:
+
+**Linux/macOS**
+```bash
+PYTHONPATH=. python examples/train_sac_pendulum.py
+```
+**Windows (CMD)**
+```
+set PYTHONPATH=.
+python examples\train_sac_pendulum.py
+```
 
