@@ -5,7 +5,14 @@ from IPython.display import clear_output
 
 
 class TrainingHistory:
-    def __init__(self, log_target="plot"):
+    def __init__(self, log_target: str = "plot"):
+        """
+        Simple training history for writing or plotting training statistics
+
+        Receives losses, rewards and wins.
+        :param log_target: Options are "plot" for plotting the loss curves as a matplotlib.pyplot object or "stdout" for
+                           writing training statistics to stdout.
+        """
         self.episode_rewards = []
         self.total_loss_V = []
         self.total_loss_Q1 = []
@@ -21,7 +28,7 @@ class TrainingHistory:
 
     def update(
         self,
-        *,
+        *,  # only allow keyword arguments
         episode_reward: float = None,
         loss_v: float = None,
         loss_q1: float = None,
@@ -30,6 +37,17 @@ class TrainingHistory:
         loss_alpha: float = None,
         won_episode: int = None,
     ):
+        """
+        Saves the current training statistics
+
+        :param episode_reward: Reward of the current training step.
+        :param loss_v: loss_v of the current training step.
+        :param loss_q1: loss_q1 of the current training step.
+        :param loss_q2: loss_q2 of the current training step.
+        :param loss_pi: loss_pi of the current training step.
+        :param loss_alpha: loss_alpha of the current training step.
+        :param won_episode: Information if the current game was won.
+        """
         if episode_reward:
             self.episode_rewards.append(episode_reward)
         if loss_v:
@@ -46,6 +64,7 @@ class TrainingHistory:
             self.winning.append(won_episode)
 
     def __call__(self):
+        """Plot or write the current training statistic to stdout or pyplot."""
         if self.log_target == "plot":
             self.plot()
         elif self.log_target == "stdout":
@@ -92,6 +111,10 @@ class TrainingHistory:
         plt.show()
 
     def stdout(self):
+        """
+        Can be used to live-plot the rewards, losses, winning rate during training instead of e.g. Tensorboard.
+        """
+
         out_string = ""
         if self.episode_rewards:
             out_string += "Reward: " + str(self.episode_rewards[-1]) + " | "
@@ -109,7 +132,15 @@ class TrainingHistory:
 
 
 class NormalizedActions(gym.ActionWrapper):
-    def action(self, action):
+    """Translates between tanh activated actions (from SAC) and the actual action space"""
+
+    def action(self, action: np.ndarray) -> np.ndarray:
+        """
+        Called by env.step, turns actions from range [-1, 1] into actions in range [action_space.low, action_space.high]
+
+        :param action: Action to be performed in range [-1, 1]
+        :return: action in action_space range of environment
+        """
         low = self.action_space.low
         high = self.action_space.high
 
@@ -118,7 +149,14 @@ class NormalizedActions(gym.ActionWrapper):
 
         return action
 
-    def reverse_action(self, action):
+    def reverse_action(self, action: np.ndarray) -> np.ndarray:
+        """
+        Turns actions from range [action_space.low, action_space.high] into actions in range [-1, 1]
+
+        :param action: Action in environments action-space range
+        :return: Action in range [-1, 1]
+        """
+
         low = self.action_space.low
         high = self.action_space.high
 

@@ -2,6 +2,7 @@ import itertools
 import typing
 from copy import deepcopy
 
+import gymnasium
 import numpy as np
 import progressbar
 import torch
@@ -284,54 +285,41 @@ class SoftActorCritic(nn.Module):
     ):
         """
         Initialization:
-
-        :param o_space:        input space, e.g. containing information about dimensionality
-        :param a_space:        actions space, e.g. containing information about dimensionality
-        :param value_fct:      value function to use. Here feed forward Neural Networks are used, but others are
+        :param config           Configuration file for the SAC Agent
+        :param value_function:  value function to use. Here feed forward Neural Networks are used, but others are
                                 possible.
-        :param policy_fct:     policy function to use. Here only Gaussian is implemented, but others are possible.
-        :param env:            gym environment, necessary for the train function - if you define your own training
+        :param policy_function: policy function to use. Here only Gaussian is implemented, but others are possible.
+        :param env:             gym environment, necessary for the train function - if you define your own training
                                 function this is not necessary
-        :param q_fct_config:   configaration file for the Q-functions (e.g. Layers, Activation function,...)
-        :param v_fct_config:   configaration file for the value functions (e.g. Layers, Activation function,...)
-        :param pi_fct_config:  configaration file for the policy network (e.g. Layers, Activation function,...)
-        :param scope:          Scope of the agent
-        :param save_path:      Path to the directory where you want to save your network weights and graphs
-        :param user_config:    contains additional parameters saved in self._config dictionary
         """
         super().__init__()
         self.config = config
 
+        # normalize the actions into range -1 to 1, to be compatible with tanh activated actions
         self.env = NormalizedActions(env) if self.config.normalize_actions else env
         self.input_space = self.env.observation_space
         self.action_space = self.env.action_space
-
         self.dim_obs, *_ = self.input_space.shape
         self.dim_act, *_ = self.action_space.shape
 
         # Using OpenAIs buffer, because it lead to speed improvement
-        self.buffer = ReplayBuffer(
-            obs_dim=self.dim_obs,
-            act_dim=self.dim_act,
-            size=self.config.buffer_size,
-        )
+        self.buffer = ReplayBuffer(obs_dim=self.dim_obs, act_dim=self.dim_act, size=self.config.buffer_size)
 
         # set up the value, policy and q-function networks
         self.Q1 = value_function(self.config.q_fct_config, input_dim=self.dim_obs + self.dim_act)
         self.Q2 = value_function(self.config.q_fct_config, input_dim=self.dim_obs + self.dim_act)
-
         self.Policy = policy_function(self.config.pi_fct_config, input_dim=self.dim_obs, output_dim=self.dim_act)
-
         self.V = value_function(self.config.v_fct_config, input_dim=self.dim_obs)
         self.V_target = deepcopy(self.V)
+        # we will not update the V_target network, hence we can freeze the parameters
         for p in self.V_target.parameters():
             p.requires_grad = False
 
-        # Alpha can also be trained
+        # Alpha can be trained
         self.target_entropy = self.config.target_entropy
         if self.target_entropy == "auto":
             self.target_entropy = -self.dim_act
-        self.target_entropy = float(self.target_entropy)  # .cast(np.float32)
+        self.target_entropy = float(self.target_entropy)
 
         # If you want to learn alpha it has to be set to 'auto'
         self.train_alpha = False
@@ -349,48 +337,74 @@ class SoftActorCritic(nn.Module):
         # TODO
         raise NotImplementedError("Saving model is not implemented yet.")
 
-    def forward(self, observation):
-        """
-        Returns a actions sampled from the Multivariate Normal defined by the Policy network
-        observation:        observation for the agent in the form [[obs1, obs2, obs3,..., obs_n]]
-        """
+    def forward(self, observation: torch.Tensor) -> np.ndarray:
+        """Returns a actions sampled from the Multivariate Normal defined by the Policy network
 
+        :param observation: Observation for the agent in the form [obs1]
+        :return:            Action sampled from the policy network, as a np.array
+        """
         with torch.no_grad():
             sampled_action, _sampled_action_log_prob, _greedy_action, _, _ = self.Policy(observation)
         return sampled_action.numpy()[0]
 
-    def act_greedy(self, observation):
-        """
-        Returns the mean of the Multivariate Normal defined by the policy network - and therefore the greedy action.
-        observation:        observation for the agent in the form [[obs1, obs2, obs3,..., obs_n]]
+    def act_greedy(self, observation: torch.Tensor) -> np.ndarray:
+        """Returns the mean of the Multivariate Normal defined by the policy network - and therefore the greedy action.
+
+        :param observation:        observation for the agent in the form [obs1]
+        :return:                   Action, as the mean of the Normal from the policy network, as a np.array
         """
 
         with torch.no_grad():
             _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(observation)
         return greedy_action.numpy()[0]
 
-    def get_q_losses(self, observation, action, reward, observation_new, env_done):
-        """Calculate Q losses"""
+    def get_q_losses(
+        self,
+        observation: torch.Tensor,
+        action: torch.Tensor,
+        reward: torch.Tensor,
+        observation_new: torch.Tensor,
+        env_done: torch.Tensor,
+    ) -> typing.Dict[str, torch.Tensor]:
+        """Calculate losses for Q networks
+
+        :param observation: observation received from the environment as a torch tensor (b, dim_observation)
+        :param action: action received from the environment as a torch tensor (b, dim_action)
+        :param reward: reward received from the environment as a torch tensor (b, dim_reward)
+        :param observation_new: observation_new received from the environment as a torch tensor (b, dim_observation_new)
+        :param env_done: env_done received from the environment as a torch tensor (b, dim_env_done)
+        :return: Dictionary containing losses for Q1 and Q2 (under keys "q1" and "q2" respectively).
+        """
+        # Get Q values for current observation and the action that was taken
         q1 = self.Q1(torch.cat((observation, action), dim=-1))
         q2 = self.Q2(torch.cat((observation, action), dim=-1))
 
         with torch.no_grad():
+            # Get the estimated value of the new environment state / observation
             v_target_val = self.V_target(observation_new)
+            # calculate target for q networks as reward + estimated value for new state (if env is not done=
             target_q = reward.view(-1, 1) + (self.config.discount * (1 - env_done)).view(-1, 1) * v_target_val
 
-        # Target for Q function
+        # Target for Q functions
         q1_loss = 0.5 * torch.mean(torch.pow(target_q - q1, 2))
         q2_loss = 0.5 * torch.mean(torch.pow(target_q - q2, 2))
         return {"q1": q1_loss, "q2": q2_loss}
 
-    def get_v_pi_alpha_losses(self, observation):
-        "Calculate losses for policy and value networks"
+    def get_v_pi_alpha_losses(self, observation: torch.Tensor) -> typing.Dict[str, torch.Tensor]:
+        """Calculate losses for policy, value networks and alpha
+
+        :param observation: observation received from the environment as a torch tensor (b, dim_observation)
+        :return: Dictionary containing losses for Value and Policy networks and alpha
+                 (under keys "v", "pi" and "alpha" respectively).
+        """
+        # sample an action from the policy network for the current observation
         pi_action, log_prob_new_act, _, pi_log_std, pi_mu = self.Policy(observation)
 
+        # get an estimate for the Q values for the action
         q1_pi = self.Q1(torch.cat((observation, pi_action), dim=-1))
         q2_pi = self.Q2(torch.cat((observation, pi_action), dim=-1))
 
-        # PI update
+        # ------------------------------- Calculate Policy loss -------------------------------
         _alpha_no_grad = self.alpha.detach() if self.train_alpha else self.alpha
         pi_loss_kl = torch.mean((_alpha_no_grad * log_prob_new_act).view(-1, 1) - q1_pi)
         policy_regularization_loss = (
@@ -408,6 +422,7 @@ class SoftActorCritic(nn.Module):
         v_loss = 0.5 * torch.mean(torch.pow(v - target_v, 2))
 
         losses = {"v": v_loss, "pi": pi_loss}
+        # ------------------------------- Calculate Alpha loss -------------------------------
         alpha_loss = None
         if self.train_alpha:
             alpha_loss = -torch.mean(self.log_alpha * (log_prob_new_act.detach() + self.target_entropy).detach())
@@ -415,6 +430,7 @@ class SoftActorCritic(nn.Module):
         return losses
 
     def update_v_target(self):
+        """Apply polyak-averaging to update the weights of V_target"""
         target_multiplier = 1 - self.config.tau
         source_multiplier = self.config.tau
 
@@ -435,7 +451,7 @@ class SoftActorCritic(nn.Module):
         n_burn_in_steps: int = 1000,
         n_log_epochs: int = 1,
         log_output: str = "plot",
-    ):
+    ) -> float:
         """
         Internal training method, can be overwritten for other environments
 
@@ -446,6 +462,7 @@ class SoftActorCritic(nn.Module):
         :param n_burn_in_steps:        number of initial steps sampled from uniform distribution over actions
         :param n_log_epochs:    Logging frequency in epochs. Defaults to 1.
         :param log_output: Where to log to based on the TrainingHistory class.
+        :return: Total reward accumulated
         """
         bar = progressbar.ProgressBar(maxval=epochs)
         bar.start()
@@ -489,7 +506,7 @@ class SoftActorCritic(nn.Module):
                     total_reward += reward
 
                     # store the action and observations
-                    self.buffer.store(ob, a, reward, ob_new, env_done)
+                    self.buffer.store(ob, a, float(reward), ob_new, env_done)
                     ob = ob_new
 
                 # update weights
@@ -564,14 +581,20 @@ class SoftActorCritic(nn.Module):
 
         return history.episode_rewards
 
-    def run_agent_on_env(self, env, greedy_action: bool = True, max_steps: int = 100):
-        """Run the agent on an environment"""
-        env = NormalizedActions(env) if self.config.normalize_actions else env
+    def run_agent_on_env(self, env: gymnasium.Env, greedy_action: bool = True, max_steps: int = 1000) -> float:
+        """Run the agent on an environment
 
+        :param env: The gymnasium Environment
+        :param greedy_action:  Whether to sample an action from the multivariate normal or to take
+                               mean as the action. Defaults to True, which means greedily taking the mean.
+        :param max_steps:      Maximum number of steps to take in the environment
+        :return: Total reward accumulated
+        """
+        env = NormalizedActions(env) if self.config.normalize_actions else env
         ob, _info = env.reset()
         total_reward = 0
         for _step in range(max_steps):
-            ob = torch.as_tensor(ob).view(1, self.config.dim_obs)
+            ob = torch.as_tensor(ob).view(1, self.dim_obs)
             a = self.act_greedy(ob) if greedy_action else self.forward(ob)
             ob, reward, terminated, truncated, *_info = env.step(a)
             _env_done = terminated or truncated
