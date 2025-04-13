@@ -1,0 +1,6 @@
+gymnasium[box2d]
+torch
+numpy
+progressbar
+matplotlib
+IPython

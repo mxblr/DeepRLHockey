@@ -1,4 +1,5 @@
 .ipynb_checkpoints
 __pycache__
-code/SAC/weights/
-code/visualization
+src/v1/SAC/weights/
+src/visualization
+.idea
