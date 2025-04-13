@@ -2,7 +2,7 @@
 
 This repository contains my complimentary code for a 
 [Reinforcement Learning Lecture](https://uni-tuebingen.de/fakultaeten/mathematisch-naturwissenschaftliche-fakultaet/fachbereiche/informatik/lehrstuehle/distributed-intelligence/home/) 
-I took at University of Tübingen in 2019. Given the recent advent in Reinforcement Learning (RL) for training LLMs, I thought 
+me and my lab partner took at University of Tübingen in 2019. Given the recent advent in Reinforcement Learning (RL) for training LLMs, I thought 
 I'd give this another shot.
       
 ## Original task
