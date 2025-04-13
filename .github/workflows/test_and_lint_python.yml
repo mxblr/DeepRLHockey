@@ -29,7 +29,7 @@ jobs:
         pip install -r requirements_test.txt -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
     - name: Lint with ruff
       run: |
-        run: ruff check --config ruff.toml --target-version=py310
+        ruff check --config ruff.toml --target-version=py310
     - name: Test with pytest
       run: |
         pytest
