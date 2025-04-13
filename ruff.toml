@@ -1,5 +1,6 @@
 # Set the maximum line length to 120.
 line-length = 120
+exclude = ["src/v1"]
 
 [lint]
 extend-select = ["I", "E", "F", "B", "SIM"]
