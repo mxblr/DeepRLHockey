@@ -18,9 +18,12 @@ Aurick Zhou, Pieter Abbeel and Sergey Levine.
 ## Original code 
 My implementation heavily leaned on OpenAIs SpinningUp 
 [code](https://github.com/openai/spinningup/blob/master/spinup/algos/tf1/sac/sac.py), which was implemented in 
-Tensorflow V1. You can now find it under 'src/v1'.
+Tensorflow V1. You can now find it under 'src/v1'. **I did not test the original code, it is at it was when I wrote 
+it.** I do not think that it will be running out of the box.
 
 ## Reimplementation
-In 2025 I chose to go with a PyTorch reimplementation, which you can find in `src/v2`.
+In 2025 I chose to go with a PyTorch reimplementation, which you can find in `src/v2`. Notice, that the details of SAC 
+appear to have changed over time (no specific value function networks, ...), however I chose to go with the original 
+version I implemented during my student times.
 
 
