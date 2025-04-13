@@ -436,7 +436,7 @@ class SoftActorCritic(nn.Module):
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            for v, v_target in zip(self.V.parameters(), self.V_target.parameters()):
+            for v, v_target in zip(self.V.parameters(), self.V_target.parameters(), strict=False):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 v_target.data.mul_(target_multiplier)
