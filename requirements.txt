@@ -1,6 +1,10 @@
-gymnasium[classic_control,box2d]
+# SAC requirements
+gymnasium[classic_control,other]
 torch
 numpy
 progressbar
 matplotlib
 IPython
+
+# llm requirements
+google-genai

@@ -1,6 +1,6 @@
 import gymnasium as gym
+import torch
 
-# sys.path.append(".")
 from src.v2.sac.sac import (
     NormalPolicyFunction,
     NormalPolicyFunctionConfig,
@@ -14,13 +14,15 @@ if __name__ == "__main__":
     env = gym.make("Pendulum-v1")
     # use same config as for TF1 implementation
     config = SoftActorCriticConfig(
-        q_fct_config=ValueFunctionConfig(),
-        v_fct_config=ValueFunctionConfig(),
-        pi_fct_config=NormalPolicyFunctionConfig(hidden_layers=[100, 100], output_activation_function_log_std=None),
+        q_fct_config=ValueFunctionConfig(hidden_layers=[256, 256, 100]),
+        v_fct_config=ValueFunctionConfig(hidden_layers=[256, 256, 100]),
+        pi_fct_config=NormalPolicyFunctionConfig(
+            hidden_layers=[256, 100, 100], output_activation_function_log_std=None
+        ),
         discount=0.99,
         tau=0.01,
         batch_size=256,
-        alpha=0.1,
+        alpha="auto",
         learning_rate_v=3e-4,
         learning_rate_pi=3e-4,
         learning_rate_q=3e-4,
@@ -44,3 +46,5 @@ if __name__ == "__main__":
 
     # evaluate how well the policy network performs visually
     sac_agent.run_agent_on_env(gym.make("Pendulum-v1", render_mode="human"), max_steps=500)
+
+    torch.save(sac_agent, "examples/models/sac_agent.pt")
