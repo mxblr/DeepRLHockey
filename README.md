@@ -39,3 +39,15 @@ set PYTHONPATH=.
 python examples\train_sac_pendulum.py
 ```
 
+### Experiments
+#### SAC
+The model trained in `examples\train_sac_pendulum.py` was saved under `examples\models\sac_agent.pt`. It works reasonably well, see here: 
+![](assets/sac_on_pendulum.gif)
+
+#### Gemini - Multimodal LLM
+Additionally, I evaluated a range of Gemini models in `examples\eval_multimodal_llm_pendulum.py`. I tested 
+`gemini-2.0-flash`, `gemini-2.5-flash-preview-04-17`, `gemini-1.5-pro`. Additionally, I tried to add some few shot 
+examples to the context window. Either by sampling random actions or by sampling actions from 
+`examples\models\sac_agent.pt`. 
+
+So far none of the models worked. 
