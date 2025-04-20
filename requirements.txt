@@ -8,3 +8,6 @@ IPython
 
 # llm requirements
 google-genai
+
+# hockey environment
+git+https://github.com/martius-lab/hockey-env.git
