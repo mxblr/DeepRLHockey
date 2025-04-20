@@ -347,6 +347,16 @@ class SoftActorCritic(nn.Module):
             sampled_action, _sampled_action_log_prob, _greedy_action, _, _ = self.Policy(observation)
         return sampled_action.numpy()[0]
 
+    def act(self, observation: torch.Tensor) -> np.ndarray:
+        """Returns a actions sampled from the Multivariate Normal defined by the Policy network
+
+        Same as "forward".
+
+        :param observation: Observation for the agent in the form [obs1]
+        :return:            Action sampled from the policy network, as a np.array
+        """
+        return self.forward(torch.as_tensor(observation).view(1, self.dim_obs))
+
     def act_greedy(self, observation: torch.Tensor) -> np.ndarray:
         """Returns the mean of the Multivariate Normal defined by the policy network - and therefore the greedy action.
 
@@ -355,7 +365,9 @@ class SoftActorCritic(nn.Module):
         """
 
         with torch.no_grad():
-            _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(observation)
+            _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(
+                torch.as_tensor(observation).view(1, self.dim_obs)
+            )
         return greedy_action.numpy()[0]
 
     def get_q_losses(
@@ -451,6 +463,7 @@ class SoftActorCritic(nn.Module):
         n_burn_in_steps: int = 1000,
         n_log_epochs: int = 1,
         log_output: str = "plot",
+        opponent_agent=None,
     ) -> float:
         """
         Internal training method, can be overwritten for other environments
@@ -462,6 +475,7 @@ class SoftActorCritic(nn.Module):
         :param n_burn_in_steps:        number of initial steps sampled from uniform distribution over actions
         :param n_log_epochs:    Logging frequency in epochs. Defaults to 1.
         :param log_output: Where to log to based on the TrainingHistory class.
+        :param opponent_agent: If playing a game with two opponents, this is the opponent
         :return: Total reward accumulated
         """
         bar = progressbar.ProgressBar(maxval=epochs)
@@ -489,25 +503,10 @@ class SoftActorCritic(nn.Module):
             # sample observations
             for _ in range(max_steps):
                 for _episode_step in range(env_steps):
-                    if total_steps < n_burn_in_steps:
-                        # choose random action during the burn in phase
-                        # sampled from the normal action space
-                        a = self.env.action_space.sample()
-                        # normalize
-                        if self.config.normalize_actions:
-                            a = self.env.reverse_action(a)
-                    else:
-                        # choose an action based on our model
-                        a = self.forward(torch.as_tensor(ob).view(1, self.dim_obs))
-
-                    # execute the action and receive updated observations and reward
-                    ob_new, reward, terminated, truncated, *_info = self.env.step(a)
-                    env_done = terminated or truncated
-                    total_reward += reward
-
-                    # store the action and observations
-                    self.buffer.store(ob, a, float(reward), ob_new, env_done)
-                    ob = ob_new
+                    ob, env_done, episode_reward = self.fill_buffer(
+                        ob, total_steps=total_steps, n_burn_in_steps=n_burn_in_steps, opponent_agent=opponent_agent
+                    )
+                    total_reward += episode_reward
 
                 # update weights
                 if total_steps >= self.config.batch_size:
@@ -581,7 +580,34 @@ class SoftActorCritic(nn.Module):
 
         return history.episode_rewards
 
-    def run_agent_on_env(self, env: gymnasium.Env, greedy_action: bool = True, max_steps: int = 1000) -> float:
+    def fill_buffer(self, ob, total_steps: int, n_burn_in_steps: int, opponent_agent=None):
+        if total_steps < n_burn_in_steps:
+            # choose random action during the burn in phase
+            # sampled from the normal action space
+            a = self.env.action_space.sample()
+            # normalize
+            if self.config.normalize_actions:
+                a = self.env.reverse_action(a)
+        else:
+            # choose an action based on our model
+            a = self.act(ob)
+
+        # if we play a game with an opponent, sample the opponent action
+        if opponent_agent:
+            ob_opponent_agent = self.env.obs_agent_two()
+            a_opponent_agent = opponent_agent.act(ob_opponent_agent)
+            a = np.hstack([a, a_opponent_agent])
+
+        # execute the action and receive updated observations and reward
+        ob_new, reward, terminated, truncated, *_info = self.env.step(a)
+        env_done = terminated or truncated
+        # store the action and observations
+        self.buffer.store(ob, a, float(reward), ob_new, env_done)
+        return ob_new, env_done, reward
+
+    def run_agent_on_env(
+        self, env: gymnasium.Env, greedy_action: bool = True, max_steps: int = 1000, opponent_agent=None
+    ) -> float:
         """Run the agent on an environment
 
         :param env: The gymnasium Environment
@@ -594,8 +620,13 @@ class SoftActorCritic(nn.Module):
         ob, _info = env.reset()
         total_reward = 0
         for _step in range(max_steps):
-            ob = torch.as_tensor(ob).view(1, self.dim_obs)
             a = self.act_greedy(ob) if greedy_action else self.forward(ob)
+            # if we play a game with an opponent, sample the opponent action
+            if opponent_agent:
+                ob_opponent_agent = env.obs_agent_two()  # noqa
+                a_opponent_agent = opponent_agent.act(ob_opponent_agent)
+                a = np.hstack([a, a_opponent_agent])
+
             ob, reward, terminated, truncated, *_info = env.step(a)
             _env_done = terminated or truncated
             total_reward += reward
