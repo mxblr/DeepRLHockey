@@ -38,21 +38,22 @@ class GeminiConfig:
         llm_temperature: float = 0.0,
         max_environment_steps: int = 100,
         sleep_between_steps: int = 0,
-        burn_in_steps: int = 0,
+        burn_in_steps_per_episode: int = 0,
         teacher: TeacherModel = TeacherModel.RANDOM,
         burn_in_episodes: int = 1,
         llm_retry_steps: int = 3,
+        thinking_budget: int = 0,
     ):
         self.llm_system_prompt = llm_system_prompt
         self.llm_model = llm_model
         self.llm_temperature = llm_temperature
         self.max_environment_steps = max_environment_steps
         self.sleep_between_steps = sleep_between_steps
-        self.burn_in_steps = burn_in_steps
+        self.burn_in_steps_per_episode = burn_in_steps_per_episode
         self.teacher = teacher
         self.burn_in_episodes = burn_in_episodes
-        self.burn_in_steps_per_episode = self.burn_in_steps // self.burn_in_episodes if self.burn_in_episodes else 0
         self.llm_retry_steps = llm_retry_steps
+        self.thinking_budget = thinking_budget
 
 
 class ActionSchema(BaseModel):
@@ -195,18 +196,19 @@ if __name__ == "__main__":
         llm_system_prompt="""Your task is to solve the inverted pendulum swingup problem.  
         The system consists of a pendulum attached at one end to a fixed point, and the other end being free. 
         The pendulum starts in a random position and the goal is to apply torque on the free end to swing it into an 
-        upright position, with its center of gravity right above the fixed point. The torque is an integer in the range 
-        of -100 to 100. 
-        Additionally, you will see the current state of the pendulum with the x-y coordinates of the pendulum’s free 
-        end x in range [-100, 100] and y in range [-100, 100], and its angular velocity in range [-100, 100].
+        upright position, with its center of gravity right above the fixed point. The upright position has values 
+        x = 100, y= 0 and angular velocity = 0. The torque is an integer in the range of 0 to 100. 
+        After each action, you will see the current state of the pendulum with the x-y coordinates of the pendulum’s 
+        free end x in range [-100, 100] and y in range [-100, 100], and its angular velocity in range [-100, 100].
         """,
-        max_environment_steps=100,
+        max_environment_steps=50,
         sleep_between_steps=5,
         llm_temperature=0.0,
-        burn_in_steps=10 * 50,
-        llm_model="gemini-2.5-flash-preview-04-17",
+        burn_in_steps_per_episode=75,
+        llm_model="gemini-2.0-flash",
         teacher=TeacherModel.SAC,
-        burn_in_episodes=10,
+        burn_in_episodes=5,
+        thinking_budget=None,
     )
 
     # set up google AI client
@@ -219,11 +221,14 @@ if __name__ == "__main__":
         ],
         response_mime_type="application/json",
         response_schema=ActionSchema,
+        thinking_config=types.ThinkingConfig(thinking_budget=config.thinking_budget)
+        if config.thinking_budget is not None
+        else None,
     )
 
     env = gym.make("Pendulum-v1", render_mode="rgb_array").unwrapped
     normalizer = LLMEnvironmentObserver(
-        llm_action_range=(-100, 100, int, "torque"),
+        llm_action_range=(0, 100, int, "torque"),
         llm_obs_range=([-100, -100, -100], [100, 100, 100], int, ["x", "y", "angular velocity"]),
         environment=env,
     )
@@ -273,8 +278,9 @@ if __name__ == "__main__":
             # end episode if we won
             if env_done := (terminated or truncated):
                 break
-        contents.extend(
-            [types.Content(role="user", parts=[types.Part(text=normalizer.get_reward_string(episode_reward))])]
+
+        contents.append(
+            types.Content(role="user", parts=[types.Part(text=normalizer.get_reward_string(episode_reward))])
         )
         print(f"Reward at end of burn-in episode {episode} is {reward}")
 
