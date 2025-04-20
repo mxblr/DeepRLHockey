@@ -26,4 +26,29 @@ In 2025 I chose to go with a PyTorch reimplementation, which you can find in `sr
 appear to have changed over time (no specific value function networks, ...), however I chose to go with the original 
 version I implemented during my student times.
 
+You can find an example on how to train SAC on `pendulum-v1` in `examples/train_sac_pendulum.py` to run it, make sure 
+to install all required dependencies, then execute:
 
+**Linux/macOS**
+```bash
+PYTHONPATH=. python examples/train_sac_pendulum.py
+```
+**Windows (CMD)**
+```
+set PYTHONPATH=.
+python examples\train_sac_pendulum.py
+```
+
+### Experiments
+#### SAC
+The model trained in `examples\train_sac_pendulum.py` was saved under `examples\models\sac_agent.pt`. It works reasonably well, see here: 
+![](assets/sac_on_pendulum.gif)
+
+#### Gemini - Multimodal LLM
+I evaluated a range of Gemini models. In `examples\eval_multimodal_llm_pendulum.py` I applied them to 
+screenshots of the environment, in `examples\eval_llm_pendulum.py` on a textual description of the environment. I 
+tested`gemini-2.0-flash`, `gemini-2.5-flash-preview-04-17`, `gemini-1.5-pro`. Additionally, I tried to add some few 
+shot examples to the context window. Either by sampling random actions or by sampling actions from 
+`examples\models\sac_agent.pt`. 
+
+So far none of the models worked. 
