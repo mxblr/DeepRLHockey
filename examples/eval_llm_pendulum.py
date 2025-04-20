@@ -77,7 +77,9 @@ class LLMEnvironmentObserver:
         self.llm_obs_space_low = llm_obs_range[0]
         self.llm_obs_space_high = llm_obs_range[1]
         self.llm_obs_space_type = llm_obs_range[2]
-        self.llm_obs_space_diff = [high - low for (low, high) in zip(self.llm_obs_space_low, self.llm_obs_space_high)]
+        self.llm_obs_space_diff = [
+            high - low for (low, high) in zip(self.llm_obs_space_low, self.llm_obs_space_high, strict=True)
+        ]
         self.llm_obs_names = llm_obs_range[3]
         # original spaces
         self.env = environment
@@ -92,7 +94,7 @@ class LLMEnvironmentObserver:
         self.original_obs_space_low = self.env.observation_space.low
         self.original_obs_space_high = self.env.observation_space.high
         self.original_obs_space_diff = [
-            high - low for (low, high) in zip(self.original_obs_space_low, self.original_obs_space_high)
+            high - low for (low, high) in zip(self.original_obs_space_low, self.original_obs_space_high, strict=True)
         ]
         self.original_obs_space_type = float  # TODO
 
