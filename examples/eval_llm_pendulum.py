@@ -42,7 +42,7 @@ class GeminiConfig:
         teacher: TeacherModel = TeacherModel.RANDOM,
         burn_in_episodes: int = 1,
         llm_retry_steps: int = 3,
-        thinking_budget: int = 0,
+        thinking_budget: typing.Union[int, None] = None,
     ):
         self.llm_system_prompt = llm_system_prompt
         self.llm_model = llm_model
@@ -139,6 +139,7 @@ class LLMEnvironmentObserver:
             self.llm_obs_space_high,
             self.llm_obs_space_low,
             self.llm_obs_space_diff,
+            strict=True,
         ):
             llm_observation.append(
                 self._transform(
@@ -163,6 +164,7 @@ class LLMEnvironmentObserver:
             self.original_obs_space_high,
             self.original_obs_space_low,
             self.original_obs_space_diff,
+            strict=True,
         ):
             env_observation.append(
                 self._transform(
@@ -180,7 +182,7 @@ class LLMEnvironmentObserver:
     def get_observation_string(self, obs):
         obs_llm = self.to_llm_observation(obs)
         observation_string = ""
-        for observation, name in zip(obs_llm, self.llm_obs_names):
+        for observation, name in zip(obs_llm, self.llm_obs_names, strict=True):
             observation_string += f" {name}: {observation}"
         return observation_string
 
