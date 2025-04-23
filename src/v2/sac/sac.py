@@ -355,7 +355,7 @@ class SoftActorCritic(nn.Module):
         :param observation: Observation for the agent in the form [obs1]
         :return:            Action sampled from the policy network, as a np.array
         """
-        return self.forward(torch.as_tensor(observation).view(1, self.dim_obs))
+        return self.forward(torch.as_tensor(observation).view(1, self.dim_obs).float())
 
     def act_greedy(self, observation: torch.Tensor) -> np.ndarray:
         """Returns the mean of the Multivariate Normal defined by the policy network - and therefore the greedy action.
@@ -366,7 +366,7 @@ class SoftActorCritic(nn.Module):
 
         with torch.no_grad():
             _sampled_action, _sampled_action_log_prob, greedy_action, _, _ = self.Policy(
-                torch.as_tensor(observation).view(1, self.dim_obs)
+                torch.as_tensor(observation).view(1, self.dim_obs).float()
             )
         return greedy_action.numpy()[0]
 
@@ -507,9 +507,11 @@ class SoftActorCritic(nn.Module):
                         ob, total_steps=total_steps, n_burn_in_steps=n_burn_in_steps, opponent_agent=opponent_agent
                     )
                     total_reward += episode_reward
+                    if env_done:
+                        break
 
                 # update weights
-                if total_steps >= self.config.batch_size:
+                if self.buffer.size >= self.config.batch_size:
                     for _gradient_step in range(grad_steps):
                         # train the actor and critic models
                         batch_observation, batch_action, batch_reward, batch_observation_new, batch_env_done = (
@@ -578,7 +580,7 @@ class SoftActorCritic(nn.Module):
                 history()
             bar.update(epoch)
 
-        return history.episode_rewards
+        return history
 
     def fill_buffer(self, ob, total_steps: int, n_burn_in_steps: int, opponent_agent=None):
         if total_steps < n_burn_in_steps:
@@ -593,6 +595,7 @@ class SoftActorCritic(nn.Module):
             a = self.act(ob)
 
         # if we play a game with an opponent, sample the opponent action
+        store_a = a
         if opponent_agent:
             ob_opponent_agent = self.env.obs_agent_two()
             a_opponent_agent = opponent_agent.act(ob_opponent_agent)
@@ -602,7 +605,7 @@ class SoftActorCritic(nn.Module):
         ob_new, reward, terminated, truncated, *_info = self.env.step(a)
         env_done = terminated or truncated
         # store the action and observations
-        self.buffer.store(ob, a, float(reward), ob_new, env_done)
+        self.buffer.store(ob, store_a, float(reward), ob_new, env_done)
         return ob_new, env_done, reward
 
     def run_agent_on_env(
@@ -620,7 +623,7 @@ class SoftActorCritic(nn.Module):
         ob, _info = env.reset()
         total_reward = 0
         for _step in range(max_steps):
-            a = self.act_greedy(ob) if greedy_action else self.forward(ob)
+            a = self.act_greedy(ob) if greedy_action else self.act(ob)
             # if we play a game with an opponent, sample the opponent action
             if opponent_agent:
                 ob_opponent_agent = env.obs_agent_two()  # noqa
