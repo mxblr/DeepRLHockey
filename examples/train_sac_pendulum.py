@@ -47,4 +47,4 @@ if __name__ == "__main__":
     # evaluate how well the policy network performs visually
     sac_agent.run_agent_on_env(gym.make("Pendulum-v1", render_mode="human"), max_steps=500)
 
-    torch.save(sac_agent, "examples/models/sac_agent.pt")
+    torch.save(sac_agent, "examples/models/sac_agent_pendulum.pt")
