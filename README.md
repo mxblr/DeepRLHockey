@@ -52,3 +52,25 @@ shot examples to the context window. Either by sampling random actions or by sam
 `examples\models\sac_agent.pt`. 
 
 So far none of the models worked. 
+
+#### Laser Hockey
+´examples\train_sac_hockey.py´ contains the code to train a SAC model on the Laser Hockey environment. The code is 
+still work in progress. Currently, the agent visually performs decent, but results are still not very good:
+
+```python
+# results, based on 10 games per opponent
+# opponent                     won    percentage of games
+# random_opponent               0     0.6
+#                              -1     0.3
+#                               1     0.1
+# sac_agent_opponent           -1     0.6
+#                               1     0.3
+#                               0     0.1
+# strong_handcrafted_opponent   1     0.5
+#                              -1     0.3
+#                               0     0.2
+# weak_handcrafted_opponent     0     0.4
+#                               1     0.4
+#                              -1     0.2
+```
+![](assets/sac_on_laser_hockey.gif)
