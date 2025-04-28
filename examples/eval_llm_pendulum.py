@@ -243,7 +243,7 @@ if __name__ == "__main__":
 
     teacher_model = None
     if config.teacher == TeacherModel.SAC:
-        teacher_model = torch.load("examples/models/sac_agent.pt", weights_only=False)
+        teacher_model = torch.load("examples/models/sac_agent_pendulum.pt", weights_only=False)
 
     contents = []
 
